@@ -9,19 +9,11 @@ virtuales, y emular un teclado completo — todo desde Home Assistant.
 
 ## Instalación
 
-```yaml
-external_components:
-  - source: github://abelbour/esphome-x28-mpx-h-connector
-    components: [ x28_alarm ]
-```
-
-O clonando localmente:
+Agrega esto a tu archivo YAML — ESPHome descarga automáticamente el componente al compilar, sin necesidad de clonar manualmente:
 
 ```yaml
 external_components:
-  - source:
-      type: local
-      path: esphome-x28-mpx-h-connector
+  - source: github://abelbour/esphome-x28-mpx-h-connector@main
     components: [ x28_alarm ]
 ```
 
