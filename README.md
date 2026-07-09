@@ -7,6 +7,8 @@ Componente externo de ESPHome que se conecta al bus MPX/MPXH de centrales de ala
 **X-28** (series N y 900X). Permite armar/desarmar, monitorear zonas, inyectar zonas
 virtuales, y emular un teclado completo — todo desde Home Assistant.
 
+> Este proyecto fue **vibe-coded** con [OpenCode](https://opencode.ai) + DeepSeek V4 Flash.
+
 ## Instalación
 
 Agrega esto a tu archivo YAML — ESPHome descarga automáticamente el componente al compilar, sin necesidad de clonar manualmente:
