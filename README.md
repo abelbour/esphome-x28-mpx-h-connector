@@ -193,6 +193,64 @@ x28_alarm:
 | `zone_type`      | string  | no        | `MPXH`      | Tipo de paquete: `MPXH` o `WIRED`       |
 | `clear_on_close` | boolean | no        | `true`      | Enviar paquete de restauración al cerrar |
 
+## Uso en Home Assistant
+
+Una vez que flasheaste el ESP y lo agregaste a Home Assistant (vía ESPHome API), las entidades aparecen automáticamente — no necesitas crear nada manualmente.
+
+### Panel de Alarma en Lovelace
+
+Agregá una tarjeta **Panel de Alarma** a tu dashboard:
+
+1. Editá el dashboard → **Añadir tarjeta** → **Panel de alarma**
+2. Seleccioná `alarm_control_panel.alarma_x28` (o el nombre que le hayas puesto)
+3. Listo — podés armar/desarmar desde la UI
+
+### Llamar Servicios desde Home Assistant
+
+Los servicios de programación se usan desde **Developer Tools → Services**:
+
+1. Andá a **Developer Tools → Services**
+2. Buscá `x28_alarm.set_entry_delay` (o cualquier servicio de la lista)
+3. Completá los parámetros y ejecutá
+
+Ejemplo — cambiar demora de entrada a 30 segundos desde HA:
+
+```yaml
+service: x28_alarm.set_entry_delay
+data:
+  seconds: 30
+```
+
+### Automatizaciones
+
+Dispará acciones cuando la alarma cambie de estado:
+
+```yaml
+automation:
+  - alias: "Notificar alarma disparada"
+    trigger:
+      - platform: state
+        entity_id: alarm_control_panel.alarma_x28
+        to: "triggered"
+    action:
+      - service: notify.mobile_app_pablo
+        data:
+          message: "¡ALARMA DISPARADA!"
+          title: "Alarma X-28"
+```
+
+### Botones en el Dashboard
+
+Agregá los botones de pánico/fuego como tarjetas de botón en Lovelace:
+
+1. Editá el dashboard → **Añadir tarjeta** → **Botón**
+2. En **Entidad**, seleccioná `button.panico` (o `button.fuego`)
+3. Opcional: cambiá el ícono y nombre
+
+### Sniffer
+
+Si habilitaste `sniffing.enabled: true`, aparecerá un `text_sensor` que muestra en tiempo real todos los paquetes del bus MPX. Agregalo como tarjeta de sensor en Lovelace para debuggear.
+
 ## Entidades
 
 ### Panel de Control (`alarm_control_panel`)
