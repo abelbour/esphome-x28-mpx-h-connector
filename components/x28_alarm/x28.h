@@ -18,6 +18,11 @@ constexpr uint32_t IDLE_TIME = 5000;
 constexpr uint32_t CTS_TIME = 25000;
 constexpr uint8_t MPX_BUFFER_LENGTH = 64;
 constexpr uint8_t MAX_ZONES = 32;
+constexpr uint32_t ARM_TIMEOUT_MS = 10000;
+constexpr uint32_t MODE_TOGGLE_WAIT_MS = 1000;
+constexpr uint8_t MODE_TOGGLE_ATTEMPTS = 10;
+constexpr uint32_t KEY_DELAY_MS = 150;
+constexpr uint32_t LONG_PRESS_DELAY_MS = 500;
 
 // ─── Model ─────────────────────────────────────────────────────────────
 enum class X28Model : uint8_t {
@@ -32,6 +37,29 @@ enum class X28Model : uint8_t {
   _9003_MPX,
   _9004_MPX,
 };
+
+struct ModelCapabilities {
+  uint8_t max_mpxh_zones;
+  uint8_t max_wired_zones;
+  bool has_wireless;
+  bool has_rf_learning;
+};
+
+constexpr ModelCapabilities get_model_capabilities(X28Model model) {
+  switch (model) {
+    case X28Model::N4_MPXH:   return { 4,  4,  false, false };
+    case X28Model::N8_MPXH:   return { 8,  8,  true,  false };
+    case X28Model::N8F_MPXH:  return { 8,  0,  false, false };
+    case X28Model::N16_MPXH:  return { 16, 8,  true,  true  };
+    case X28Model::N32_MPXH:  return { 32, 8,  true,  true  };
+    case X28Model::N32F_MPXH: return { 32, 0,  false, true  };
+    case X28Model::_9002_MPX: return { 2,  2,  false, false };
+    case X28Model::_9003_MPX: return { 3,  3,  false, false };
+    case X28Model::_9004_MPX: return { 4,  4,  false, false };
+    case X28Model::AUTO:
+    default:                  return { 32, 8,  true,  true  };
+  }
+}
 
 // ─── Packet codes ──────────────────────────────────────────────────────
 enum MPXCode : uint16_t {
@@ -93,10 +121,7 @@ class MPXPacket {
   uint16_t get_checksum() const { return word_ & 0x0F; }
 
   bool is_valid() const {
-    int count = 0;
-    for (int i = 0; i < 16; i++)
-      count += (word_ >> i) & 0x01;
-    return (count % 2) == 0;
+    return (__builtin_popcount(word_) % 2) == 0;
   }
 
  private:
@@ -107,7 +132,7 @@ class MPXPacket {
 class CircularBuffer {
  public:
   void push(uint16_t word) {
-    uint8_t next = (write_index_ + 1) % MPX_BUFFER_LENGTH;
+    uint8_t next = (write_index_ + 1) & (MPX_BUFFER_LENGTH - 1);
     if (next == read_index_) return;
     buffer_[write_index_] = word;
     write_index_ = next;
@@ -116,12 +141,12 @@ class CircularBuffer {
   uint16_t read() {
     if (is_empty()) return 0;
     uint16_t val = buffer_[read_index_];
-    read_index_ = (read_index_ + 1) % MPX_BUFFER_LENGTH;
+    read_index_ = (read_index_ + 1) & (MPX_BUFFER_LENGTH - 1);
     return val;
   }
 
   bool is_empty() const { return read_index_ == write_index_; }
-  bool is_full() const { return (write_index_ + 1) % MPX_BUFFER_LENGTH == read_index_; }
+  bool is_full() const { return ((write_index_ + 1) & (MPX_BUFFER_LENGTH - 1)) == read_index_; }
 
  private:
   uint16_t buffer_[MPX_BUFFER_LENGTH];
@@ -141,6 +166,7 @@ class MPXBus {
   void send_packet(uint16_t payload);
   void send_key(uint8_t key_index);
   void send_keys(const std::string &keys);
+  void send_keys(const char *keys, size_t len);
 
   void set_event_callback(std::function<void(uint16_t)> callback) {
     event_callback_ = callback;
@@ -155,6 +181,9 @@ class MPXBus {
   InternalGPIOPin *tx_pin_{nullptr};
   bool invert_rx_{true};
   bool invert_tx_{true};
+  uint8_t rx_pin_num_{0};
+  uint8_t tx_pin_num_{0};
+  bool rx_idle_level_{false};
 
   CircularBuffer buffer_;
   uint16_t recbuf_{0};
@@ -185,10 +214,12 @@ class X28Alarm : public Component {
   void set_sniffing_enabled(bool en) { sniffing_enabled_ = en; }
   void set_sniffing_throttle(uint32_t ms) { sniffing_throttle_ms_ = ms; }
   void set_zone_debounce_ms(uint32_t ms) { zone_debounce_ms_ = ms; }
-  void set_zone_code_override(uint8_t zone, uint16_t code) { zone_code_overrides_[zone] = code; }
+  void set_zone_code_override(uint8_t zone, uint16_t code) {
+    if (zone > 0 && zone <= MAX_ZONES) zone_code_overrides_[zone] = code;
+  }
 
   void add_virtual_zone(uint8_t zone, uint16_t packet_code,
-                         bool clear_on_close,
+                         bool clear_on_close, bool trigger_on_open,
                          binary_sensor::BinarySensor *sensor);
 
   // ── Entity Registration ──
@@ -212,6 +243,7 @@ class X28Alarm : public Component {
   void set_entry_annunciator_service(bool enabled);
   void set_battery_save_service(bool enabled);
   void set_owner_code_condition_service(bool disarm_only);
+  void set_zone_conditionality_service(bool enabled);
   void change_owner_code_service(const std::string &new_code);
   void change_installer_code_service(const std::string &new_code);
   void program_user_service(int user, const std::string &code, int permissions, bool can_disarm);
@@ -246,6 +278,7 @@ class X28Alarm : public Component {
     uint16_t packet_code;
     bool clear_on_close;
     binary_sensor::BinarySensor *sensor;
+    bool trigger_on_open;
     bool last_state;
   };
 
@@ -261,6 +294,7 @@ class X28Alarm : public Component {
   std::string code_;
   std::string installer_code_ = "467825";
   X28Model model_{X28Model::AUTO};
+  ModelCapabilities model_capabilities_{get_model_capabilities(X28Model::AUTO)};
   bool debug_{false};
   bool sniffing_enabled_{false};
   uint32_t sniffing_throttle_ms_{1000};
@@ -282,7 +316,7 @@ class X28Alarm : public Component {
   text_sensor::TextSensor *sniffer_text_{nullptr};
 
   std::vector<VirtualZoneState> virtual_zones_;
-  uint16_t zone_code_overrides_[9]{};  // 1-indexed, index 0 unused
+  uint16_t zone_code_overrides_[MAX_ZONES + 1]{};
 };
 
 // ─── X28AlarmControlPanel ────────────────────────────────────────────────

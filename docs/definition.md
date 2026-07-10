@@ -21,7 +21,7 @@ alarm systems over the MPX/MPXH bus.
    sequences to arm/disarm/program the panel.
 3. **Alarm Control Panel entity** — Standard Home Assistant alarm_control_panel with
    states: DISARMED, ARMED_HOME, ARMED_AWAY, PENDING, TRIGGERED.
-4. **Zone monitoring** — Binary sensors for zones 1–8, both MPXH and wired types.
+4. **Zone monitoring** — Binary sensors for zones 1–32 (model-dependent), both MPXH and wired types.
 5. **Sniffing mode** — All-bus packet logging for discovery and debugging.
 6. **Virtual zone injection** — Bridge HA binary sensors into the MPX bus as native
    alarm zones, enabling the X-28 panel to respond to HA sensors.
@@ -192,36 +192,33 @@ x28_alarm:
 
 **Valid values:**
 
-| Value | Family | Max MPXH zones | Max wired zones | P 888 | Partitions |
-|-------|--------|---------------|----------------|-------|------------|
-| `AUTO` (default) | — | 8 | 8 | — | detected from bus |
-| `N4-MPXH` | N | 4 | 4+2 | No | Yes (plugin) |
-| `N8-MPXH` | N | 8 | 8 | No | Yes (plugin) |
-| `N8F-MPXH` | N | 8 | 0 | No | Yes (plugin) |
-| `N16-MPXH` | N | 16 | 8 | Yes | Yes (plugin) |
-| `N32-MPXH` | N | 32 | 8 | Yes | Yes (plugin) |
-| `9002-MPX` | 900X | 0 | 2 | No | No |
-| `9003-MPX` | 900X | 0 | 3 | No | No |
-| `9004-MPX` | 900X | 0 | 4 | No | No |
+| Value | Family | Max MPXH zones | Max wired zones | Wireless | RF learning |
+|-------|--------|---------------|----------------|----------|-------------|
+| `AUTO` (default) | — | 32 | 8 | Yes | Yes |
+| `N4-MPXH` | N | 4 | 4 | No | No |
+| `N8-MPXH` | N | 8 | 8 | Yes | No |
+| `N8F-MPXH` | N | 8 | 0 | No | No |
+| `N16-MPXH` | N | 16 | 8 | Yes | Yes |
+| `N32-MPXH` | N | 32 | 8 | Yes | Yes |
+| `N32F-MPXH` | N | 32 | 0 | No | Yes |
+| `9002-MPX` | 900X | 2 | 2 | No | No |
+| `9003-MPX` | 900X | 3 | 3 | No | No |
+| `9004-MPX` | 900X | 4 | 4 | No | No |
 
 **When `AUTO` is selected:**
-- The component starts in discovery mode after `setup()`.
-- It monitors the bus for zone packets (Z1 through Z8) and event codes.
-- After receiving a zone packet for zone N, it sets `max_zone = max(max_zone, N)`.
-- If an ESTOY/ME_VOY/ARMED/DISARMED packet is seen, the panel is confirmed
-  as MPXH-capable.
-- After 30 seconds of bus monitoring (or when a user explicitly configures
-  a zone sensor), the detected model is locked in.
-- The detected model can be overridden by explicit `model` config.
+- The component uses conservative defaults: 32 MPXH zones, 8 wired zones,
+  wireless and RF learning enabled. This ensures all zone packets are matched
+  regardless of the actual panel model.
+- Users should set the explicit model when possible for optimal behavior.
 
 **Capability implications:**
-- **Zone count:** Config validation rejects `zone: N` if `N > max_zones` for
-  the model. For AUTO, zone creation is allowed up to the detected max.
-- **Virtual zones:** Virtual zone `zone` parameter is capped at `max_zones`.
-- **Partitions:** Only N-series models expose partition configuration.
-- **Wired zones:** 900X series and N8F-MPXH have no wired zone inputs;
-  `zone_type: WIRED` is not available for those models.
-- **P 888 (hermanar particiones):** Only available on N32-MPXH.
+- **Zone count:** Services validate `zone` against `model_capabilities_.max_mpxh_zones`.
+- **Wired zones:** Models with `max_wired_zones == 0` (N8F-MPXH, N32F-MPXH)
+  have no wired zone inputs; the `set_wired_zones` service is not registered.
+- **RF learning:** Only registered for models with `has_rf_learning == true`
+  (N16, N32, N32F).
+- **P 888 (hermanar particiones):** Available on N16-MPXH and N32-MPXH via
+  the `set_partition_merge` service.
 
 ### 3.3 Factory Default Zone Configurations
 
@@ -275,27 +272,27 @@ enum class X28Model : uint8_t {
     _9004_MPX,
 };
 
-struct X28ModelCapabilities {
-    uint8_t max_mpxh_zones;
-    uint8_t max_wired_zones;
-    bool has_partitions;
-    bool has_p888;          // hermanar particiones
-    bool supports_wired;    // wired zone terminals present
+struct ModelCapabilities {
+  uint8_t max_mpxh_zones;
+  uint8_t max_wired_zones;
+  bool has_wireless;
+  bool has_rf_learning;
 };
 
-constexpr X28ModelCapabilities get_model_capabilities(X28Model model) {
-    switch (model) {
-        case X28Model::N4_MPXH:    return { 4,  6,  true,  false, true  };
-        case X28Model::N8_MPXH:    return { 8,  8,  true,  false, true  };
-        case X28Model::N8F_MPXH:   return { 8,  0,  true,  false, false };
-        case X28Model::N16_MPXH:   return { 16, 8,  true,  false, true  };
-        case X28Model::N32_MPXH:   return { 32, 8,  true,  true,  true  };
-        case X28Model::_9002_MPX:  return { 0,  2,  false, false, true  };
-        case X28Model::_9003_MPX:  return { 0,  3,  false, false, true  };
-        case X28Model::_9004_MPX:  return { 0,  4,  false, false, true  };
-        case X28Model::AUTO:
-        default:                   return { 8,  8,  true,  false, true  };
-    }
+constexpr ModelCapabilities get_model_capabilities(X28Model model) {
+  switch (model) {
+    case X28Model::N4_MPXH:   return { 4,  4,  false, false };
+    case X28Model::N8_MPXH:   return { 8,  8,  true,  false };
+    case X28Model::N8F_MPXH:  return { 8,  0,  false, false };
+    case X28Model::N16_MPXH:  return { 16, 8,  true,  true  };
+    case X28Model::N32_MPXH:  return { 32, 8,  true,  true  };
+    case X28Model::N32F_MPXH: return { 32, 0,  false, true  };
+    case X28Model::_9002_MPX: return { 2,  2,  false, false };
+    case X28Model::_9003_MPX: return { 3,  3,  false, false };
+    case X28Model::_9004_MPX: return { 4,  4,  false, false };
+    case X28Model::AUTO:
+    default:                  return { 32, 8,  true,  true  };
+  }
 }
 ```
 
@@ -343,13 +340,22 @@ segment:
 | `0`       | `100`    | 1 × BIT_TIME  | 2 × BIT_TIME  | 3.81 ms |
 | `1`       | `110`    | 2 × BIT_TIME  | 1 × BIT_TIME  | 3.81 ms |
 
-The bus is measured between consecutive falling edges. A short HIGH pulse
-indicates bit `0`; a long HIGH pulse indicates bit `1`.
+The ISR processes on the **active bus level** (precomputed from `invert_rx`
+during setup). It measures the duration of the idle pulse by timing between
+consecutive active transitions:
+
+```
+For non-inverted (invert_rx=false, rx_idle_level=false): process on pin LOW
+  → measures HIGH (idle) pulse width
+For inverted (invert_rx=true, rx_idle_level=true): process on pin HIGH
+  → measures LOW (idle) pulse width
+```
 
 **Decoding logic** (from the interrupt handler):
-- Measure time between consecutive falling edges.
-- If duration < ZERO_TIME (2000 µs) → bit = 0.
-- If duration > ZERO_TIME → bit = 1.
+- Measure time between consecutive active edges (idle pulse width).
+- If duration < ZERO_TIME (2000 µs) → short idle → Manchester bit = 0.
+- If duration > ZERO_TIME → long idle → Manchester bit = 1.
+- If duration > IDLE_TIME (5000 µs) → bus was idle → start of new packet.
 
 ### 4.4 16-bit Word Layout
 
@@ -367,11 +373,16 @@ Width:    1          3                       8                                4
 | Checksum | 3–0  | 4-bit checksum |
 
 **Packet validation (`isValid()`):**
-- Count set bits (popcount) across all 16 bits.
+- Count set bits (popcount) across all 16 bits using `__builtin_popcount()`
+  (single Xtensa instruction on ESP8266/ESP32, vs 16-iteration loop).
 - If popcount is even, parity is correct → return true.
 - If popcount is odd → packet is corrupt → discard.
 
 ### 4.5 Reception Algorithm (Interrupt Handler)
+
+The ISR fires on every CHANGE of the RX pin. It measures **idle pulse widths**
+(durations between consecutive active edges) by processing on the **active bus
+level**:
 
 ```
 ISR on CHANGE of RX pin
@@ -379,21 +390,21 @@ ISR on CHANGE of RX pin
 ├─ Read current micros → curr_micros
 ├─ length = curr_micros - prev_micros
 │
-├─ IF pin state == LOW (falling edge, active state):
+├─ Read pin via direct GPIO register (cached pin number)
+├─ IF pin_level != rx_idle_level_ (active level, precomputed from invert_rx):
 │     IF length > IDLE_TIME (5000 µs):
 │         // Bus was idle — new packet starting
 │         recbuf = 0
 │         bit_number = 0
-│     ELSE:
-│         // Data bit
+│     ELSE IF bit_number < 16:
+│         // Data bit — length = idle pulse width between active edges
 │         recbuf = recbuf << 1
 │         IF length > ZERO_TIME (2000 µs):
-│             recbuf |= 1
+│             recbuf |= 1   // long idle → Manchester bit 1
 │         ELSE:
-│             recbuf |= 0
+│             recbuf |= 0   // short idle → Manchester bit 0
 │         bit_number++
 │         IF bit_number == 16:
-│             // Complete packet received
 │             circular_buffer.push(recbuf)
 │             recbuf = 0
 │             bit_number = 0
@@ -401,13 +412,33 @@ ISR on CHANGE of RX pin
 └─ prev_micros = curr_micros
 ```
 
+**Processing on active level:** The ISR fires on every pin CHANGE. When the
+pin transitions to the ACTIVE level (the level that is NOT the idle bus
+state), it measures the time elapsed since the last active transition. That
+time is the **idle pulse width** — the duration the bus spent at the idle
+level between two active pulses. Manchester-encoded bits use:
+- Long idle (>2000 µs) = Manchester bit 1 (short active + long idle)
+- Short idle (<2000 µs) = Manchester bit 0 (long active + short idle)
+
+The start bit (1× BIT_TIME active) is followed by the first idle period; a
+long idle (>IDLE_TIME) resets the packet decoder, ensuring the start bit's
+active pulse is not misinterpreted as a data bit. This matches how the
+reference library (`x28-mpx-controller`) processes the bus.
+
 **Critical implementation notes:**
-- The ISR must be placed in IRAM on ESP32/ESP8266 to avoid flash cache misses.
-- `digitalRead()` is called inside the ISR — this is safe on ESP32 with IRAM.
-- `micros()` returns `unsigned long` (32-bit, wraps every ~71 minutes). The
-  subtraction handles wrapping correctly as long as ISR frequency > wrap interval.
-- All variables used in the ISR must be `volatile` (or `static` inside the
-  static function, accessing through a global instance pointer).
+- The ISR is marked `IRAM_ATTR` and placed in IRAM on ESP32/ESP8266.
+- On ESP8266 and ESP32, the pin is read via direct GPIO register access
+  (`GPIO_REG_READ(GPIO_IN_ADDRESS)` / `REG_READ(GPIO_IN_REG)`) using a
+  cached pin number. This avoids virtual dispatch through the ESPHome GPIO
+  abstraction layer and ensures IRAM safety. On other platforms, falls back
+  to `digitalRead()`.
+- `rx_idle_level_` is precomputed during `setup()`: `!invert_rx`. For
+  non-inverted buses this is `false` (idle=HIGH, process on LOW = active);
+  for inverted buses it is `true` (idle=LOW, process on HIGH = active).
+- All ISR state (`recbuf_`, `bit_number_`, `prev_micros_`) lives in DRAM
+  accessed through a static `instance_` pointer — no flash access in the ISR.
+- `micros()` returns `unsigned long` (32-bit, wraps every ~71 minutes). Wrap
+  handling is implicit in unsigned subtraction.
 
 ### 4.6 Transmission Algorithm
 
@@ -415,44 +446,61 @@ ISR on CHANGE of RX pin
 sendPacket(word):
 │
 ├─ WAIT: bus idle for CTS_TIME (25000 µs)
-│   └─ Poll RX pin; reset idle counter on each LOW (bus active)
+│   └─ Poll RX pin (direct GPIO read); reset idle counter on ACTIVE bus
 │
+├─ Detach RX interrupt (prevents false triggers from own TX edges)
 ├─ Enable TX: set TX pin as OUTPUT
-├─ DISABLE INTERRUPTS
+│
+├─ Precompute register masks for invert_tx:
+│   reg_idle   = invert_tx ? W1TC : W1TS
+│   reg_active = invert_tx ? W1TS : W1TC
 │
 ├─ START BIT:
-│   └─ digitalWrite(TX, LOW) for BIT_TIME (1270 µs)
+│   └─ MPX_REG_WRITE(reg_active, 1 << pin) for BIT_TIME (1270 µs)
 │
 ├─ 16 DATA BITS (MSB first, i = 15 → 0):
+│   Precomputed register writes — no per-bit branching on invert_tx:
 │   IF bit i of word == 0:
-│       digitalWrite(TX, HIGH) for BIT_TIME
-│       digitalWrite(TX, LOW)  for 2 * BIT_TIME
+│       MPX_REG_WRITE(reg_idle, 1 << pin)   for BIT_TIME
+│       MPX_REG_WRITE(reg_active, 1 << pin) for 2 * BIT_TIME
 │   ELSE: // bit == 1
-│       digitalWrite(TX, HIGH) for 2 * BIT_TIME
-│       digitalWrite(TX, LOW)  for BIT_TIME
+│       MPX_REG_WRITE(reg_idle, 1 << pin)   for 2 * BIT_TIME
+│       MPX_REG_WRITE(reg_active, 1 << pin) for BIT_TIME
 │
 ├─ STOP BIT:
-│   └─ digitalWrite(TX, HIGH) for BIT_TIME
+│   └─ MPX_REG_WRITE(reg_idle, 1 << pin) for BIT_TIME
 │
 ├─ Disable TX: set TX pin as INPUT (high-Z)
-├─ ENABLE INTERRUPTS
+├─ Reattach RX interrupt (CHANGE)
 └─ Return
 ```
 
 **CTS wait logic:**
-- The bus is idle when the RX pin has been HIGH (inactive) for > IDLE_TIME.
-- Before transmitting, wait until the bus has been idle continuously for
-  CTS_TIME. If any bus activity is detected during the wait, reset the timer.
-- This prevents collision with other bus devices (keypads, sensors, central).
+- The bus is idle-HIGH. Before transmitting, wait until the bus has been idle
+  continuously for CTS_TIME. If any bus activity is detected during the wait,
+  reset the timer.
+- The check compares the raw pin level against `rx_idle_level_`. When the
+  level matches (bus is active, i.e., not at the idle level), the idle timer
+  is reset.
 
 **Interrupt discipline:**
-- Interrupts are disabled only during the actual bit-banging transmission
-  (~61 ms max). This is acceptable on ESP32 (which has hardware WiFi/BT
-  stacks) but may cause WiFi disconnections on ESP8266. If needed, use
-  `delayMicroseconds()` and check `wifi_station_connect()` status after TX.
-- The RCSwitch-based approach (from x28_sniffer) avoids disabling interrupts
-  by using the RCSwitch library's transmitter, but at the cost of less
-  precise timing control.
+- Only the RX interrupt is detached during transmission (via
+  `detachInterrupt()` / `attachInterrupt()`), not all interrupts. This allows
+  WiFi, timers, and other system interrupts to fire normally during the
+  ~61 ms TX window — critical for ESP8266 stability.
+- The Manchester-encoded bit loop uses direct GPIO register writes
+  (`GPIO_OUT_W1TS` / `GPIO_OUT_W1TC` on ESP8266, `GPIO.out_w1ts` /
+  `GPIO.out_w1tc` on ESP32) rather than `digitalWrite()`, reducing per-bit
+  overhead from ~1µs to ~0.1µs. On other platforms, falls back to the
+  ESPHome `digital_write()` API.
+
+**Platform-specific GPIO macros (defined in `x28.cpp`):**
+
+| Platform | Read pin | Set pin high | Set pin low |
+|----------|----------|--------------|-------------|
+| ESP8266 | `GPIO_REG_READ(GPIO_IN_ADDRESS)` | `GPIO_REG_WRITE(GPIO_OUT_W1TS_ADDRESS, mask)` | `GPIO_REG_WRITE(GPIO_OUT_W1TC_ADDRESS, mask)` |
+| ESP32 | `REG_READ(GPIO_IN_REG)` | `REG_WRITE(GPIO_OUT_W1TS_REG, mask)` | `REG_WRITE(GPIO_OUT_W1TC_REG, mask)` |
+| Other | `digitalRead()` | `digitalWrite(HIGH)` | `digitalWrite(LOW)` |
 
 ### 4.7 Bus Arbitration
 
@@ -491,17 +539,13 @@ alarm state changes. The ESP receives them passively.
 | Z3_WIRED           | `0xB026`  | 101      | 0x02       | Zone 3 sensor triggered (wired) |
 | Z4_WIRED           | `0xB010`  | 101      | 0x01       | Zone 4 sensor triggered (wired) |
 
-**Observation:** For MPXH zones, the data byte encodes the zone number as its
-lower nibble (0x61→Z1, 0x62→Z2, etc.). This pattern may extend to zones 5–8:
-
-| Zone | Predicted MPXH code | Predicted Wired code |
-|------|---------------------|----------------------|
-| 5    | `0x1655` (data=0x65) | `0xB008` (data=0x00, checksum=0x08?) |
-| 6    | `0x1663` (data=0x66) | — |
-| 7    | `0x9670` (data=0x67) | — |
-| 8    | `0x1680` (data=0x68) | — |
-
-These predictions must be verified via sniffing against a real panel.
+**Zone code generation:** MPXH zone codes follow a consistent pattern for all
+zones 1–32: data byte = `0x60 + zone`, checksum cycles through `[5, 3, 0, 0]`
+by `(zone-1) % 4`, with even parity over all 16 bits. Wired codes are known
+only for zones 1–8 (enum constants in code). The component generates MPXH
+codes on-the-fly via `mpxh_code_for_zone()` and matches against wired codes
+up to the model's `max_wired_zones`. Codes for specific zones can be
+overridden via `zone_code_overrides` config.
 
 ### 5.2 Zone Status Interpretation
 
@@ -571,7 +615,7 @@ then special keys at indices 10–24:
 | 11    | KEY_P_LONG_PRESS  | `0x00AC` + `0x810A` |
 | 12    | KEY_F             | `0x80BF`  |
 | 13    | KEY_F_LONG_PRESS  | `0x80BF` + `0x813C` |
-| 14    | KEY_ZONA_IN       | `0x00CF` + `0x0000` |
+| 14    | KEY_ZONA_IN       | `0x00CF` |
 | 15    | KEY_MODO          | `0x80DC`  |
 | 16    | KEY_PANIC         | `0x80EA`  |
 | 17    | KEY_P             | (duplicate of 10) |
@@ -616,7 +660,7 @@ components/
 
 **`binary_sensor.py`:**
 - Define `CONFIG_SCHEMA` for zone and estoy binary sensors.
-- Accept `zone` parameter: `ESTOY` or `1`–`8`.
+- Accept `zone` parameter: `ESTOY` or `1`–`32` (capped by model capabilities).
 - Generate C++ code for binary sensor publish calls.
 
 **`button.py`:**
@@ -744,7 +788,7 @@ button:
 
 | Parameter        | Type    | Required | Default  | Description |
 |------------------|---------|----------|----------|-------------|
-| `zone`           | int (1-N) | yes    | —        | X-28 zone number to emulate (max per model, see §3.2) |
+| `zone`           | int (1-32) | yes   | —        | X-28 zone number to emulate (capped by model capabilities) |
 | `sensor_id`      | string  | yes      | —        | ESPHome entity ID to monitor |
 | `trigger`        | string  | no       | `ON`     | State that triggers zone packet (`ON`, `OPEN`) |
 | `zone_type`      | string  | no       | `MPXH`   | Packet type: `MPXH` or `WIRED` |
@@ -788,8 +832,8 @@ Implements ESPHome's `AlarmControlPanel` abstract class.
 
 | Action         | Implementation |
 |----------------|----------------|
-| `arm_away()`   | 1. If currently in Estoy mode, press MODO (toggle to Me Voy). 2. Wait 100 ms. 3. Call `send_keys(code)`. 4. Set state to PENDING. 5. Wait for ALARM_ARMED packet → set ARMED_AWAY. 6. Timeout after 10 s → revert to DISARMED + log error. |
-| `arm_home()`   | 1. If currently in Me Voy mode, press MODO (toggle to Estoy). 2. Wait 100 ms. 3. Call `send_keys(code)`. 4. Set state to PENDING. 5. Wait for ALARM_ARMED packet → set ARMED_HOME. 6. Timeout after 10 s → revert. |
+| `arm_away()`   | 1. If currently in Estoy mode, press MODO (toggle to Me Voy). 2. Wait up to 1 s per attempt (up to 10 attempts) for ME_VOY packet. 3. Call `send_keys(code)`. 4. Set state to PENDING. 5. Wait for ALARM_ARMED packet → set ARMED_AWAY. 6. Timeout after 10 s → revert to DISARMED + log error. |
+| `arm_home()`   | 1. If currently in Me Voy mode, press MODO (toggle to Estoy). 2. Wait up to 1 s per attempt (up to 10 attempts) for ESTOY packet. 3. Call `send_keys(code)`. 4. Set state to PENDING. 5. Wait for ALARM_ARMED packet → set ARMED_HOME. 6. Timeout after 10 s → revert. |
 | `disarm()`     | 1. Call `send_keys(code)`. 2. Set state to PENDING. 3. Wait for ALARM_DISARMED packet → set DISARMED. 4. Timeout after 10 s → log error. |
 
 **Mode tracking:**
@@ -827,22 +871,12 @@ Implements ESPHome's `AlarmControlPanel` abstract class.
 - This implements a retriggerable one-shot: the sensor stays ON as long as
   packets keep arriving, and auto-clears when they stop.
 
-**Zone code matching table:**
-
-| `zone` config | MPXH codes matched | Wired codes matched |
-|---------------|-------------------|---------------------|
-| 1 | `0x1615` | `0xB08A` |
-| 2 | `0x1623` | `0xB045` |
-| 3 | `0x9630` | `0xB026` |
-| 4 | `0x1640` | `0xB010` |
-| 5 | `0x1655`* | `0xB008`* |
-| 6 | `0x1663`* | *(unknown)* |
-| 7 | `0x9670`* | *(unknown)* |
-| 8 | `0x1680`* | *(unknown)* |
-
-*Codes for zones 5–8 are predicted from the protocol pattern; see §5.1.
-These should be verified and can be overridden via configuration if sniffing
-reveals different codes.
+**Zone code matching:** The component generates MPXH codes dynamically for all
+zones 1–32 using the formula: data = `0x60 + zone`, checksum cycled from
+`[5, 3, 0, 0]` by `(zone-1) % 4`, with even parity. For wired zones, known
+codes exist only for zones 1–8 (see §5.1). The match loop is bounded by
+`model_capabilities_.max_mpxh_zones` and `model_capabilities_.max_wired_zones`.
+Any zone code can be overridden via `zone_codes` config.
 
 ### 7.3 Buttons (`button`)
 
@@ -978,7 +1012,7 @@ fields:
 | `F` | KEY_F | Short press of F key |
 | `f` | KEY_F_LONG | Long press of F key |
 | `M` | KEY_MODO | MODO key (toggle Estoy/Me Voy) |
-| `Z` | KEY_ZONA_IN | ZONA key followed by "00" numeric |
+| `Z` | KEY_ZONA_IN | ZONA key alone (`0x00CF`), no trailing "00" |
 | `L` | KEY_ZONA_OUT | ZONA key followed by OUT code |
 | `!` | KEY_PANIC | Panic short press |
 | `@` | KEY_FIRE | Fire short press |
@@ -1079,7 +1113,7 @@ All P-codes are entered from advanced programming mode. The table below is sourc
 - P 888 requires a partition plug-in board (E1P, E3P, or E7P series)
 - P 995 applies to zones 9–16 only (requires N16+ with sufficient zones)
 - P 996 is for seismic/impact detectors (robo rápida)
-- P-codes P 770–P 772 (PGM) set output behavior based on system states (0=activated, 1=ready, 2=Estoy, 3=MeVoy, 4=alarm, 5=help, 6=assault, 7=phone line fail, 8=mains fail, 9=unassigned); partition defaults to 1
+- P-codes P 770–P 772 (PGM) set output behavior based on system states (0=not assigned, 1=activated, 2=ready, 3=Estoy, 4=MeVoy, 5=alarm, 6=follow, 7=phone line fail, 8=mains fail, 9=unassigned); partition defaults to 1. Values per official N-series manual: 1=Activada, 0=No asignada.
 
 **Note on P-code range overlap:** P-codes in the 880–889 range are shared between the central panel and keypad programming, but accessed via different entry sequences:
 - **Central panel:** Enter via `<code>PPp` (advanced programming)
@@ -1192,11 +1226,20 @@ needed.
 | `set_entry_annunciator` | `enabled: bool` | `<ic>PPpP776<N>F` | Entry beep on/off |
 | `set_battery_save` | `enabled: bool` | `<ic>PPpP886<N>F` | Battery save mode |
 | `set_owner_code_condition` | `disarm_only: bool` | `<ic>PPpP880<N>F` | 0=arm+disarm, 1=disarm only |
+| `set_zone_conditionality` | `enabled: bool` | `<ic>PPpP884<N>F` | 0=no, 1=yes (zones 2 & 4 conditionality) |
 | `set_wired_zones` | `enabled: bool` | `<ic>PPpP885<N>F` | 0=disable wired, 1=enable (N16/N32) |
 | `set_partition_merge` | `enabled: bool` | `<ic>PPpP888<N>F` | 0=independent, 1=merged (N16/N32) |
+| `set_siren_b_duration` | `minutes: 1–12` | `<ic>PPpP775<MM>F` | Siren B on-time in minutes |
+| `set_clock_source` | `crystal: bool` | `<ic>PPpP777<N>F` | Clock source: 0=grid, 1=crystal |
+| `set_wired_zones` | `enabled: bool` | `<ic>PPpP885<N>F` | Enable/disable wired zones (models with wired only) |
+| `set_partition_merge` | `enabled: bool` | `<ic>PPpP888<N>F` | Merge partitions (N16/N32) |
 | `set_pgm_output` | `output, option, partition` | `<ic>PPpP77OOPF` | PGM0/1/2 behavior |
 
 Note: `<ic>` is the installer code from config (default `467825`).
+RF learning services (`rf_learn_mode`, `rf_learn_slot`, `rf_delete_slot`,
+`exit_rf_learning`) are only registered for models with `has_rf_learning == true`.
+The `set_wired_zones` service is only registered for models with
+`max_wired_zones > 0`.
 
 ```yaml
 service: x28_alarm.set_entry_delay
@@ -1306,13 +1349,14 @@ helper that assembles the complete key sequence:
 ```cpp
 void X28Alarm::send_programmed_sequence(const std::string &body,
                                         bool use_installer,
-                                        bool advanced) {
+                                        bool advanced,
+                                        bool exit_f) {
   std::string seq;
   seq += use_installer ? installer_code_ : code_;
   seq += "PP";
   if (advanced) seq += "p";
   seq += body;
-  seq += "F";
+  if (exit_f) seq += "F";
   bus_.send_keys(seq);
 }
 
@@ -1348,8 +1392,7 @@ provides a **learn mode** to capture actual codes from the bus.
 ```yaml
 x28_alarm:
   zone_codes:
-    5: 0x1655      # override zone 5 MPXH code
-    5_wired: 0x????  # optional wired override
+    5: 0x1655      # override zone 5 packet code (replaces both MPXH and wired matching)
 ```
 
 This allows the component to work with any panel firmware that may use
@@ -1510,15 +1553,17 @@ public:
     void set_zone_debounce_ms(uint32_t ms) { zone_debounce_ms_ = ms; }
     void set_model(X28Model model) { model_ = model; }
     
-    // Virtual zone config
-    struct VirtualZoneConfig {
-        uint8_t zone;
-        uint16_t packet_code;
-        bool clear_on_close;
-        BinarySensor *sensor;
-        bool last_state;
+    struct VirtualZoneState {
+      uint8_t zone;
+      uint16_t packet_code;
+      bool clear_on_close;
+      binary_sensor::BinarySensor *sensor;
+      bool trigger_on_open;
+      bool last_state;
     };
-    void add_virtual_zone(const VirtualZoneConfig &cfg);
+    void add_virtual_zone(uint8_t zone, uint16_t packet_code,
+                           bool clear_on_close, bool trigger_on_open,
+                           binary_sensor::BinarySensor *sensor);
 
     // ── Entity Registration ──
     void set_alarm_control_panel(AlarmControlPanel *acp) { acp_ = acp; }
@@ -1558,6 +1603,10 @@ public:
     void set_zone_type_service(int zone, const std::string &type);
     void set_panic_zone_service();
     void set_tamper_zone_service();
+    void set_clock_source_service(bool crystal);
+    void set_wired_zones_service(bool enabled);
+    void set_partition_merge_service(bool enabled);
+    void set_pgm_output_service(int output, int option, int partition);
 
     // ── HA Alarm Control Panel Actions ──
     void arm_away();
@@ -1583,29 +1632,33 @@ protected:
     // Config
     std::string code_;
     std::string installer_code_ = "467825";
+    X28Model model_ = X28Model::AUTO;
+    ModelCapabilities model_capabilities_{get_model_capabilities(X28Model::AUTO)};
     bool debug_ = false;
     bool sniffing_enabled_ = false;
     uint32_t sniffing_throttle_ms_ = 1000;
     uint32_t zone_debounce_ms_ = 500;
-    X28Model model_ = X28Model::AUTO;
     
     // State tracking
-    MPXEvent last_mode_ = ME_VOY;  // default to away mode
+    uint16_t last_mode_{MPX_CODE_ME_VOY};
     bool armed_confirmed_ = false;
-    uint32_t arm_pending_start_ = 0;
     bool arm_pending_ = false;
+    uint32_t arm_pending_start_ = 0;
+    bool disarm_pending_ = false;
+    bool mode_waiting_ = false;
     uint32_t last_sniff_log_ = 0;
     uint16_t last_sniff_word_ = 0;
     
     // Entities
-    AlarmControlPanel *acp_ = nullptr;
-    binary_sensor::BinarySensor *estoy_sensor_ = nullptr;
-    binary_sensor::BinarySensor *zone_sensors_[32] = {};  // max for N32-MPXH
-    uint32_t zone_last_packet_[32] = {};
-    text_sensor::TextSensor *sniffer_text_ = nullptr;
+    alarm_control_panel::AlarmControlPanel *acp_{nullptr};
+    binary_sensor::BinarySensor *estoy_sensor_{nullptr};
+    binary_sensor::BinarySensor *zone_sensors_[MAX_ZONES]{};
+    uint32_t zone_last_packet_[MAX_ZONES]{};
+    text_sensor::TextSensor *sniffer_text_{nullptr};
     
     // Virtual zones
-    std::vector<VirtualZoneConfig> virtual_zones_;
+    std::vector<VirtualZoneState> virtual_zones_;
+    uint16_t zone_code_overrides_[MAX_ZONES + 1]{};
 };
 ```
 
@@ -1978,8 +2031,9 @@ longer than 500 ms to execute, a warning is logged.
 - **Zone bypass/exclusion** — HA service to send `Z<NN>` toggle sequence
   for a given zone, controlling whether it's included/excluded in the
   current mode.
-- **Learn mode for zones 5–8** — When a zone packet is received that doesn't
-  match any known code, offer it as a new zone mapping via HA event or config.
+- **Learn mode for unknown zone codes** — When a zone packet is received that
+  doesn't match any known code, offer it as a new zone mapping via HA event or
+  config (override via `zone_codes`).
 - **Entry/exit number entities** — `Number` entities in HA for entry delay
   (P 881) and exit delay (P 882), with write-back via `send_keys`.
 - **Model auto-detection refinement** — Improve AUTO mode detection by
@@ -2064,7 +2118,7 @@ but builds on transmission primitives from `x28-mpx-controller`:
 |--------|--------|---------|
 | `alarm_control_panel` | `alarm_control_panel.x28_alarm` | Arm/disarm/trigger states |
 | `binary_sensor` | `binary_sensor.x28_estoy` | Stay mode indicator |
-| `binary_sensor` | `binary_sensor.x28_zone_N` | Zone trigger state (N=1..8) |
+| `binary_sensor` | `binary_sensor.x28_zone_N` | Zone trigger state (N=1..32, model-dependent) |
 | `button` | `button.x28_panic` | Panic alarm |
 | `button` | `button.x28_fire` | Fire alarm |
 | `text_sensor` | `text_sensor.x28_sniffer` | Latest bus packet (when sniffing enabled) |

@@ -55,7 +55,7 @@ CODE_VALIDATOR = cv.All(
 )
 
 VIRTUAL_ZONE_SCHEMA = cv.Schema({
-    cv.Required(CONF_ZONE): cv.int_range(1, 8),
+    cv.Required(CONF_ZONE): cv.int_range(1, 32),
     cv.Required(CONF_SENSOR_ID): cv.use_id(binary_sensor.BinarySensor),
     cv.Optional(CONF_TRIGGER, default="ON"): cv.one_of("ON", "OPEN", upper=True),
     cv.Optional(CONF_ZONE_TYPE, default="MPXH"): cv.one_of("MPXH", "WIRED", upper=True),
@@ -83,7 +83,7 @@ CONFIG_SCHEMA = cv.Schema({
     cv.Optional(CONF_VIRTUAL_ZONES, default=[]): cv.ensure_list(VIRTUAL_ZONE_SCHEMA),
     cv.Optional(CONF_ZONE_DEBOUNCE_MS, default=500): cv.positive_int,
     cv.Optional(CONF_ZONE_CODES, default={}): cv.Schema({
-        cv.int_range(1, 8): cv.hex_uint16_t,
+        cv.int_range(1, 32): cv.hex_uint16_t,
     }),
 }).extend(cv.COMPONENT_SCHEMA)
 
@@ -126,6 +126,14 @@ async def to_code(config):
             "WIRED": [0xB08A, 0xB045, 0xB026, 0xB010, 0xB008, 0xB1D2, 0xB05C, 0xB134],
         }
 
-        packet_code = zone_offsets[zone_type][zone - 1]
+        if zone_type == "MPXH" and zone > 8:
+            cs_table = [5, 3, 0, 0]
+            cs = cs_table[(zone - 1) & 3]
+            w = (1 << 12) | ((0x60 + zone) << 4) | cs
+            if bin(w).count("1") % 2 == 1:
+                w |= 0x8000
+            packet_code = w
+        else:
+            packet_code = zone_offsets[zone_type][zone - 1]
 
-        cg.add(var.add_virtual_zone(zone, packet_code, clear_on_close, sensor))
+        cg.add(var.add_virtual_zone(zone, packet_code, clear_on_close, trigger == "OPEN", sensor))

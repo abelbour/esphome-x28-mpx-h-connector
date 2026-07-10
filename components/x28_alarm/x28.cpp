@@ -2,6 +2,23 @@
 #include "esphome/core/hal.h"
 #include "esphome/core/helpers.h"
 
+// ─── Platform-specific direct GPIO access ────────────────────────────────
+// Used in ISR (must avoid virtual dispatch + be IRAM-safe) and in the
+// timing-critical send_packet() Manchester loop.
+#if defined(USE_ESP8266)
+  #include <esp8266_peri.h>
+  #define MPX_GPIO_READ(pin)   ((GPIO_REG_READ(GPIO_IN_ADDRESS) >> (pin)) & 1)
+  #define MPX_W1TS_ADDR        GPIO_OUT_W1TS_ADDRESS
+  #define MPX_W1TC_ADDR        GPIO_OUT_W1TC_ADDRESS
+  #define MPX_REG_WRITE(a, v)  GPIO_REG_WRITE(a, v)
+#elif defined(USE_ESP32)
+  #include <soc/gpio_reg.h>
+  #define MPX_GPIO_READ(pin)   ((REG_READ(GPIO_IN_REG) >> (pin)) & 1)
+  #define MPX_W1TS_ADDR        GPIO_OUT_W1TS_REG
+  #define MPX_W1TC_ADDR        GPIO_OUT_W1TC_REG
+  #define MPX_REG_WRITE(a, v)  REG_WRITE(a, v)
+#endif
+
 namespace esphome {
 namespace x28_alarm {
 
@@ -25,11 +42,14 @@ void MPXBus::setup(InternalGPIOPin *rx_pin, InternalGPIOPin *tx_pin,
   tx_pin_ = tx_pin;
   invert_rx_ = invert_rx;
   invert_tx_ = invert_tx;
+  rx_pin_num_ = rx_pin->get_pin();
+  tx_pin_num_ = tx_pin->get_pin();
+  rx_idle_level_ = !invert_rx;
 
   rx_pin_->setup();
   tx_pin_->setup();
 
-  attachInterrupt(digitalPinToInterrupt(rx_pin_->get_pin()),
+  attachInterrupt(digitalPinToInterrupt(rx_pin_num_),
                   interrupt_handler, CHANGE);
 }
 
@@ -50,7 +70,16 @@ void IRAM_ATTR MPXBus::interrupt_handler() {
   uint32_t now = micros();
   uint32_t length = now - instance_->prev_micros_;
 
-  if (instance_->rx_pin_->digital_read() == (instance_->invert_rx_ ? LOW : HIGH)) {
+  #if defined(USE_ESP8266) || defined(USE_ESP32)
+    bool pin_level = MPX_GPIO_READ(instance_->rx_pin_num_);
+  #else
+    bool pin_level = instance_->rx_pin_->digital_read();
+  #endif
+
+  // Process on the ACTIVE bus level: length between consecutive active edges
+  // gives the IDLE pulse width, which correctly maps to Manchester bits
+  // (long idle = bit 1, short idle = bit 0).
+  if (pin_level != instance_->rx_idle_level_) {
     if (length > IDLE_TIME) {
       instance_->recbuf_ = 0;
       instance_->bit_number_ = 0;
@@ -73,37 +102,73 @@ void MPXBus::send_packet(uint16_t payload) {
   // CTS wait: bus must be idle for CTS_TIME before transmitting
   uint32_t bus_idle_start = micros();
   while (micros() - bus_idle_start < CTS_TIME) {
-    if (rx_pin_->digital_read() == (invert_rx_ ? LOW : HIGH)) {
+    #if defined(USE_ESP8266) || defined(USE_ESP32)
+      bool active = MPX_GPIO_READ(rx_pin_num_);
+    #else
+      bool active = rx_pin_->digital_read();
+    #endif
+    if (active != rx_idle_level_) {
       bus_idle_start = micros();
     }
     delay(0);
   }
 
-  noInterrupts();
+  // Detach RX interrupt during TX to avoid false triggers from our own signal
+  detachInterrupt(digitalPinToInterrupt(rx_pin_num_));
   tx_pin_->pin_mode(gpio::FLAG_OUTPUT);
 
-  tx_pin_->digital_write(invert_tx_ ? HIGH : LOW);
-  delayMicroseconds(BIT_TIME);
+  #if defined(USE_ESP8266) || defined(USE_ESP32)
+    uint32_t pin_mask = 1 << tx_pin_num_;
+    uint32_t reg_idle = invert_tx_ ? (uint32_t)MPX_W1TC_ADDR : (uint32_t)MPX_W1TS_ADDR;
+    uint32_t reg_active = invert_tx_ ? (uint32_t)MPX_W1TS_ADDR : (uint32_t)MPX_W1TC_ADDR;
 
-  for (int i = 0; i < 16; i++) {
-    if (!(payload & 0x8000)) {
-      tx_pin_->digital_write(invert_tx_ ? LOW : HIGH);
-      delayMicroseconds(BIT_TIME);
-      tx_pin_->digital_write(invert_tx_ ? HIGH : LOW);
-      delayMicroseconds(2 * BIT_TIME);
-    } else {
-      tx_pin_->digital_write(invert_tx_ ? LOW : HIGH);
-      delayMicroseconds(2 * BIT_TIME);
-      tx_pin_->digital_write(invert_tx_ ? HIGH : LOW);
-      delayMicroseconds(BIT_TIME);
+    // Start bit: bus LOW (active)
+    MPX_REG_WRITE(reg_active, pin_mask);
+    delayMicroseconds(BIT_TIME);
+
+    for (int i = 0; i < 16; i++) {
+      if (!(payload & 0x8000)) {
+        // '0' on bus: idle for 1T, active for 2T
+        MPX_REG_WRITE(reg_idle, pin_mask);
+        delayMicroseconds(BIT_TIME);
+        MPX_REG_WRITE(reg_active, pin_mask);
+        delayMicroseconds(2 * BIT_TIME);
+      } else {
+        // '1' on bus: idle for 2T, active for 1T
+        MPX_REG_WRITE(reg_idle, pin_mask);
+        delayMicroseconds(2 * BIT_TIME);
+        MPX_REG_WRITE(reg_active, pin_mask);
+        delayMicroseconds(BIT_TIME);
+      }
+      payload <<= 1;
     }
-    payload <<= 1;
-  }
 
-  tx_pin_->digital_write(invert_tx_ ? LOW : HIGH);
+    // Stop bit: bus HIGH (idle)
+    MPX_REG_WRITE(reg_idle, pin_mask);
+  #else
+    tx_pin_->digital_write(invert_tx_ ? HIGH : LOW);
+    delayMicroseconds(BIT_TIME);
+
+    for (int i = 0; i < 16; i++) {
+      if (!(payload & 0x8000)) {
+        tx_pin_->digital_write(invert_tx_ ? LOW : HIGH);
+        delayMicroseconds(BIT_TIME);
+        tx_pin_->digital_write(invert_tx_ ? HIGH : LOW);
+        delayMicroseconds(2 * BIT_TIME);
+      } else {
+        tx_pin_->digital_write(invert_tx_ ? LOW : HIGH);
+        delayMicroseconds(2 * BIT_TIME);
+        tx_pin_->digital_write(invert_tx_ ? HIGH : LOW);
+        delayMicroseconds(BIT_TIME);
+      }
+      payload <<= 1;
+    }
+
+    tx_pin_->digital_write(invert_tx_ ? LOW : HIGH);
+  #endif
   delayMicroseconds(BIT_TIME);
   tx_pin_->pin_mode(gpio::FLAG_INPUT);
-  interrupts();
+  attachInterrupt(digitalPinToInterrupt(rx_pin_num_), interrupt_handler, CHANGE);
 }
 
 void MPXBus::send_key(uint8_t key_index) {
@@ -112,30 +177,33 @@ void MPXBus::send_key(uint8_t key_index) {
 }
 
 void MPXBus::send_keys(const std::string &keys) {
-  for (char c : keys) {
+  send_keys(keys.data(), keys.size());
+}
+
+void MPXBus::send_keys(const char *keys, size_t len) {
+  for (size_t i = 0; i < len; i++) {
+    char c = keys[i];
     if (c >= '0' && c <= '9')
       send_key(c - '0');
     else if (c == 'P')
       send_key(10);
     else if (c == 'p') {
       send_packet(0x00AC);
-      delay(150);
+      delay(KEY_DELAY_MS);
       send_packet(0x810A);
     } else if (c == 'F')
       send_key(11);
     else if (c == 'f') {
       send_packet(0x80BF);
-      delay(150);
+      delay(KEY_DELAY_MS);
       send_packet(0x813C);
     } else if (c == 'M')
       send_key(13);
-    else if (c == 'Z') {
+    else if (c == 'Z')
       send_packet(0x00CF);
-      delay(150);
-      send_packet(0x0000);
-    } else if (c == 'L') {
+    else if (c == 'L') {
       send_packet(0x00CF);
-      delay(150);
+      delay(KEY_DELAY_MS);
       send_packet(0x8169);
     } else if (c == '!')
       send_key(14);
@@ -143,14 +211,14 @@ void MPXBus::send_keys(const std::string &keys) {
       send_key(15);
     else if (c == '#') {
       send_packet(0x80EA);
-      delay(150);
+      delay(KEY_DELAY_MS);
       send_packet(0x012F);
     } else if (c == '*') {
       send_packet(0x00F9);
-      delay(150);
+      delay(KEY_DELAY_MS);
       send_packet(0x0119);
     }
-    delay(150);
+    delay(KEY_DELAY_MS);
   }
 }
 
@@ -164,6 +232,7 @@ bool MPXBus::is_keyboard_code(uint16_t code) {
 
 // ─── X28Alarm ───────────────────────────────────────────────────────────
 void X28Alarm::setup() {
+  model_capabilities_ = get_model_capabilities(model_);
   bus_.setup(rx_pin_, tx_pin_, invert_rx_, invert_tx_);
 
   bus_.set_event_callback([this](uint16_t word) {
@@ -185,13 +254,16 @@ void X28Alarm::setup() {
   register_service([this](bool enabled) { this->set_entry_annunciator_service(enabled); }, "set_entry_annunciator", {"enabled"});
   register_service([this](bool enabled) { this->set_battery_save_service(enabled); }, "set_battery_save", {"enabled"});
   register_service([this](bool disarm_only) { this->set_owner_code_condition_service(disarm_only); }, "set_owner_code_condition", {"disarm_only"});
+  register_service([this](bool enabled) { this->set_zone_conditionality_service(enabled); }, "set_zone_conditionality", {"enabled"});
   register_service([this](const std::string &new_code) { this->change_owner_code_service(new_code); }, "change_owner_code", {"new_code"});
   register_service([this](const std::string &new_code) { this->change_installer_code_service(new_code); }, "change_installer_code", {"new_code"});
   register_service([this](int user, const std::string &code, int permissions, bool can_disarm) { this->program_user_service(user, code, permissions, can_disarm); }, "program_user", {"user", "code", "permissions", "can_disarm"});
-  register_service([this] { this->rf_learn_mode_service(); }, "rf_learn_mode");
-  register_service([this](int slot) { this->rf_learn_slot_service(slot); }, "rf_learn_slot", {"slot"});
-  register_service([this](int slot) { this->rf_delete_slot_service(slot); }, "rf_delete_slot", {"slot"});
-  register_service([this] { this->exit_rf_learning_service(); }, "exit_rf_learning");
+  if (model_capabilities_.has_rf_learning) {
+    register_service([this] { this->rf_learn_mode_service(); }, "rf_learn_mode");
+    register_service([this](int slot) { this->rf_learn_slot_service(slot); }, "rf_learn_slot", {"slot"});
+    register_service([this](int slot) { this->rf_delete_slot_service(slot); }, "rf_delete_slot", {"slot"});
+    register_service([this] { this->exit_rf_learning_service(); }, "exit_rf_learning");
+  }
   register_service([this](int zone) { this->toggle_zone_in_mode_service(zone); }, "toggle_zone_in_mode", {"zone"});
   register_service([this] { this->save_estoy_config_service(); }, "save_estoy_config");
   register_service([this] { this->save_mevoy_config_service(); }, "save_mevoy_config");
@@ -199,7 +271,9 @@ void X28Alarm::setup() {
   register_service([this] { this->set_panic_zone_service(); }, "set_panic_zone");
   register_service([this] { this->set_tamper_zone_service(); }, "set_tamper_zone");
   register_service([this](bool crystal) { this->set_clock_source_service(crystal); }, "set_clock_source", {"crystal"});
-  register_service([this](bool enabled) { this->set_wired_zones_service(enabled); }, "set_wired_zones", {"enabled"});
+  if (model_capabilities_.max_wired_zones > 0) {
+    register_service([this](bool enabled) { this->set_wired_zones_service(enabled); }, "set_wired_zones", {"enabled"});
+  }
   register_service([this](bool enabled) { this->set_partition_merge_service(enabled); }, "set_partition_merge", {"enabled"});
   register_service([this](int output, int option, int partition) { this->set_pgm_output_service(output, option, partition); }, "set_pgm_output", {"output", "option", "partition"});
 
@@ -213,7 +287,8 @@ void X28Alarm::loop() {
     bool state = vz.sensor->state;
     if (state != vz.last_state) {
       vz.last_state = state;
-      if (state) {
+      bool trigger = vz.trigger_on_open ? !state : state;
+      if (trigger) {
         bus_.send_packet(vz.packet_code);
       } else if (vz.clear_on_close) {
         bus_.send_packet(vz.packet_code);
@@ -222,10 +297,12 @@ void X28Alarm::loop() {
   }
 
   if (arm_pending_) {
-    if (millis() - arm_pending_start_ > 10000) {
+    if (millis() - arm_pending_start_ > ARM_TIMEOUT_MS) {
       arm_pending_ = false;
       if (disarm_pending_) {
         disarm_pending_ = false;
+        if (acp_)
+          acp_->publish_state(alarm_control_panel::ACP_STATE_DISARMED);
         ESP_LOGW(TAG, "Disarm timeout — no ALARM_DISARMED received");
       } else {
         if (acp_)
@@ -247,10 +324,30 @@ void X28Alarm::loop() {
 
 void X28Alarm::dump_config() {
   ESP_LOGCONFIG(TAG, "X-28 Alarm:");
+  ESP_LOGCONFIG(TAG, "  Model: %s", model_ == X28Model::AUTO ? "AUTO" :
+                model_ == X28Model::N4_MPXH ? "N4-MPXH" :
+                model_ == X28Model::N8_MPXH ? "N8-MPXH" :
+                model_ == X28Model::N8F_MPXH ? "N8F-MPXH" :
+                model_ == X28Model::N16_MPXH ? "N16-MPXH" :
+                model_ == X28Model::N32_MPXH ? "N32-MPXH" :
+                model_ == X28Model::N32F_MPXH ? "N32F-MPXH" :
+                "OTHER");
+  ESP_LOGCONFIG(TAG, "  Zones: %d MPXH, %d wired",
+                model_capabilities_.max_mpxh_zones,
+                model_capabilities_.max_wired_zones);
+  ESP_LOGCONFIG(TAG, "  Wireless: %s, RF Learning: %s",
+                model_capabilities_.has_wireless ? "YES" : "NO",
+                model_capabilities_.has_rf_learning ? "YES" : "NO");
   ESP_LOGCONFIG(TAG, "  RX Pin: GPIO%d (invert: %s)",
                 rx_pin_->get_pin(), invert_rx_ ? "YES" : "NO");
   ESP_LOGCONFIG(TAG, "  TX Pin: GPIO%d (invert: %s)",
                 tx_pin_->get_pin(), invert_tx_ ? "YES" : "NO");
+  ESP_LOGCONFIG(TAG, "  Code: %s, Installer Code: %s",
+                code_.c_str(), installer_code_.c_str());
+  ESP_LOGCONFIG(TAG, "  Debug: %s, Sniffing: %s",
+                debug_ ? "YES" : "NO", sniffing_enabled_ ? "YES" : "NO");
+  ESP_LOGCONFIG(TAG, "  Zone debounce: %d ms", zone_debounce_ms_);
+  ESP_LOGCONFIG(TAG, "  Virtual zones: %d", (int)virtual_zones_.size());
 }
 
 void X28Alarm::set_zone_sensor(uint8_t zone, binary_sensor::BinarySensor *s) {
@@ -259,9 +356,9 @@ void X28Alarm::set_zone_sensor(uint8_t zone, binary_sensor::BinarySensor *s) {
 }
 
 void X28Alarm::add_virtual_zone(uint8_t zone, uint16_t packet_code,
-                                 bool clear_on_close,
+                                 bool clear_on_close, bool trigger_on_open,
                                  binary_sensor::BinarySensor *sensor) {
-  virtual_zones_.push_back({zone, packet_code, clear_on_close, sensor, false});
+  virtual_zones_.push_back({zone, packet_code, clear_on_close, sensor, trigger_on_open, false});
 }
 
 void X28Alarm::send_keys_service(const std::string &keys) {
@@ -270,13 +367,20 @@ void X28Alarm::send_keys_service(const std::string &keys) {
 
 // ─── Programming Service Helper ──────────────────────────────────────────
 void X28Alarm::send_programmed_sequence(const std::string &body, bool use_installer, bool advanced, bool exit_f) {
-  std::string seq;
-  seq += use_installer ? installer_code_ : code_;
-  seq += "PP";
-  if (advanced) seq += "p";
-  seq += body;
-  if (exit_f) seq += "F";
-  bus_.send_keys(seq);
+  const std::string &prefix = use_installer ? installer_code_ : code_;
+  char buf[48];
+  size_t pos = 0;
+  memcpy(buf + pos, prefix.data(), prefix.size());
+  pos += prefix.size();
+  buf[pos++] = 'P';
+  buf[pos++] = 'P';
+  if (advanced)
+    buf[pos++] = 'p';
+  memcpy(buf + pos, body.data(), body.size());
+  pos += body.size();
+  if (exit_f)
+    buf[pos++] = 'F';
+  bus_.send_keys(buf, pos);
 }
 
 // ─── High-Level Programming Services ────────────────────────────────────
@@ -333,7 +437,8 @@ void X28Alarm::set_siren_b_duration_service(int minutes) {
 }
 
 void X28Alarm::set_sabotage_inhibit_service(bool enabled) {
-  send_programmed_sequence(std::string("P774") + (enabled ? '1' : '0'), true, true);
+  const char body[] = {'P', '7', '7', '4', enabled ? '1' : '0'};
+  send_programmed_sequence(std::string(body, 5), true, true);
 }
 
 void X28Alarm::set_ac_frequency_service(int hz) {
@@ -341,19 +446,28 @@ void X28Alarm::set_ac_frequency_service(int hz) {
     ESP_LOGW(TAG, "Invalid AC frequency %d, using 50", hz);
     hz = 50;
   }
-  send_programmed_sequence(std::string("P773") + (hz == 60 ? '1' : '0'), true, true);
+  const char body[] = {'P', '7', '7', '3', hz == 60 ? '1' : '0'};
+  send_programmed_sequence(std::string(body, 5), true, true);
 }
 
 void X28Alarm::set_entry_annunciator_service(bool enabled) {
-  send_programmed_sequence(std::string("P776") + (enabled ? '1' : '0'), true, true);
+  const char body[] = {'P', '7', '7', '6', enabled ? '1' : '0'};
+  send_programmed_sequence(std::string(body, 5), true, true);
 }
 
 void X28Alarm::set_battery_save_service(bool enabled) {
-  send_programmed_sequence(std::string("P886") + (enabled ? '1' : '0'), true, true);
+  const char body[] = {'P', '8', '8', '6', enabled ? '1' : '0'};
+  send_programmed_sequence(std::string(body, 5), true, true);
 }
 
 void X28Alarm::set_owner_code_condition_service(bool disarm_only) {
-  send_programmed_sequence(std::string("P880") + (disarm_only ? '1' : '0'), true, true);
+  const char body[] = {'P', '8', '8', '0', disarm_only ? '1' : '0'};
+  send_programmed_sequence(std::string(body, 5), true, true);
+}
+
+void X28Alarm::set_zone_conditionality_service(bool enabled) {
+  const char body[] = {'P', '8', '8', '4', enabled ? '1' : '0'};
+  send_programmed_sequence(std::string(body, 5), true, true);
 }
 
 void X28Alarm::change_owner_code_service(const std::string &new_code) {
@@ -425,6 +539,10 @@ void X28Alarm::exit_rf_learning_service() {
 }
 
 void X28Alarm::toggle_zone_in_mode_service(int zone) {
+  if (zone < 1 || zone > model_capabilities_.max_mpxh_zones) {
+    ESP_LOGW(TAG, "Zone %d out of range (1-%d)", zone, model_capabilities_.max_mpxh_zones);
+    return;
+  }
   char buf[16];
   snprintf(buf, sizeof(buf), "Z%02d", zone);
   bus_.send_keys(std::string(buf));
@@ -439,6 +557,10 @@ void X28Alarm::save_mevoy_config_service() {
 }
 
 void X28Alarm::set_zone_type_service(int zone, const std::string &type) {
+  if (zone < 1 || zone > model_capabilities_.max_mpxh_zones) {
+    ESP_LOGW(TAG, "Zone %d out of range (1-%d)", zone, model_capabilities_.max_mpxh_zones);
+    return;
+  }
   int pcode;
   if (type == "output_b")                     pcode = 991;
   else if (type == "output_ab")               pcode = 992;
@@ -462,15 +584,18 @@ void X28Alarm::set_tamper_zone_service() {
 }
 
 void X28Alarm::set_clock_source_service(bool crystal) {
-  send_programmed_sequence(std::string("P777") + (crystal ? '1' : '0'), true, true);
+  const char body[] = {'P', '7', '7', '7', crystal ? '1' : '0'};
+  send_programmed_sequence(std::string(body, 5), true, true);
 }
 
 void X28Alarm::set_wired_zones_service(bool enabled) {
-  send_programmed_sequence(std::string("P885") + (enabled ? '1' : '0'), true, true);
+  const char body[] = {'P', '8', '8', '5', enabled ? '1' : '0'};
+  send_programmed_sequence(std::string(body, 5), true, true);
 }
 
 void X28Alarm::set_partition_merge_service(bool enabled) {
-  send_programmed_sequence(std::string("P888") + (enabled ? '1' : '0'), true, true);
+  const char body[] = {'P', '8', '8', '8', enabled ? '1' : '0'};
+  send_programmed_sequence(std::string(body, 5), true, true);
 }
 
 void X28Alarm::set_pgm_output_service(int output, int option, int partition) {
@@ -495,18 +620,18 @@ void X28Alarm::set_pgm_output_service(int output, int option, int partition) {
 void X28Alarm::toggle_mode(uint16_t target_mode) {
   if (last_mode_ == target_mode)
     return;
-  for (int attempt = 0; attempt < 10; attempt++) {
+  for (int attempt = 0; attempt < MODE_TOGGLE_ATTEMPTS; attempt++) {
     bus_.send_key(13);
     mode_waiting_ = true;
     uint32_t start = millis();
-    while (mode_waiting_ && millis() - start < 1000) {
+    while (mode_waiting_ && millis() - start < MODE_TOGGLE_WAIT_MS) {
       bus_.loop();
-      delay(1);
+      delay(0);
     }
     if (!mode_waiting_)
       return;
   }
-  ESP_LOGW(TAG, "Mode toggle timeout after 10 attempts — proceeding anyway");
+  ESP_LOGW(TAG, "Mode toggle timeout after %d attempts — proceeding anyway", MODE_TOGGLE_ATTEMPTS);
   mode_waiting_ = false;
 }
 
@@ -604,18 +729,22 @@ void X28Alarm::on_event(uint16_t word) {
   on_packet(word);
 }
 
+static uint16_t mpxh_code_for_zone(uint8_t zone) {
+  static const uint8_t cs[] = {5, 3, 0, 0};
+  uint16_t w = (1 << 12) | ((uint16_t)(0x60 + zone) << 4) | cs[(zone - 1) & 3];
+  if (__builtin_popcount(w) & 1) w |= 0x8000;
+  return w;
+}
+
 void X28Alarm::on_packet(uint16_t word) {
-  static const uint16_t MPXH_CODES[] = {
-      MPX_CODE_Z1_MPXH, MPX_CODE_Z2_MPXH, MPX_CODE_Z3_MPXH, MPX_CODE_Z4_MPXH,
-      MPX_CODE_Z5_MPXH, MPX_CODE_Z6_MPXH, MPX_CODE_Z7_MPXH, MPX_CODE_Z8_MPXH,
-  };
   static const uint16_t WIRED_CODES[] = {
       MPX_CODE_Z1_WIRED, MPX_CODE_Z2_WIRED, MPX_CODE_Z3_WIRED, MPX_CODE_Z4_WIRED,
       MPX_CODE_Z5_WIRED, MPX_CODE_Z6_WIRED, MPX_CODE_Z7_WIRED, MPX_CODE_Z8_WIRED,
   };
-  for (uint8_t z = 0; z < 8; z++) {
+  for (uint8_t z = 0; z < model_capabilities_.max_mpxh_zones; z++) {
     uint16_t override = zone_code_overrides_[z + 1];
-    if (word == MPXH_CODES[z] || word == WIRED_CODES[z] ||
+    if (word == mpxh_code_for_zone(z + 1) ||
+        (z < model_capabilities_.max_wired_zones && word == WIRED_CODES[z]) ||
         (override != 0 && word == override)) {
       on_zone(z + 1, true);
       return;
@@ -662,7 +791,7 @@ void X28ActionButton::press_action() {
   if (!parent_) return;
   parent_->send_packet(code_);
   if (long_code_ != 0) {
-    delay(500);
+    delay(LONG_PRESS_DELAY_MS);
     parent_->send_packet(long_code_);
   }
 }

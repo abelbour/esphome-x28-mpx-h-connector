@@ -23,7 +23,7 @@ external_components:
 
 - Panel de control de alarma (`alarm_control_panel`) con estados: ARMADO, DESARMADO,
   PENDIENTE, DISPARADO, ARMADO_HOGAR, ARMADO_TOTAL
-- Monitoreo de zonas (1–8) como sensores binarios
+- Monitoreo de zonas (1–32, según modelo) como sensores binarios
 - Sensor binario de modo Estoy (Stay) / Me Voy (Away)
 - Botones de pánico y fuego (pulsación corta y larga)
 - Modo rastreador (sniffer) que muestra todos los paquetes del bus
@@ -187,7 +187,7 @@ x28_alarm:
 
 | Parámetro        | Tipo    | Requerido | Por defecto | Descripción                             |
 |------------------|---------|-----------|-------------|-----------------------------------------|
-| `zone`           | int     | sí        | —           | Número de zona X-28 (1–8)               |
+| `zone`           | int     | sí        | —           | Número de zona X-28 (1–32, según modelo) |
 | `sensor_id`      | id      | sí        | —           | ID del sensor binario de ESPHome a monitorear |
 | `trigger`        | string  | no        | `ON`        | Estado que dispara: `ON` u `OPEN`       |
 | `zone_type`      | string  | no        | `MPXH`      | Tipo de paquete: `MPXH` o `WIRED`       |
@@ -340,7 +340,7 @@ data:
 | `F`      | F (corto)      | `0x80BF`                      |
 | `f`      | F (largo)      | `0x80BF` + `0x813C`           |
 | `M`      | MODO           | `0x80DC`                      |
-| `Z`      | ZONA (entrada) | `0x00CF` + `0x0000`           |
+| `Z`      | ZONA (entrada) | `0x00CF`                       |
 | `L`      | ZONA (salida)  | `0x00CF` + `0x8169`           |
 | `!`      | Pánico         | `0x80EA`                      |
 | `@`      | Fuego          | `0x00F9`                      |
@@ -376,6 +376,7 @@ Servicios autocontenidos: entran a programación avanzada, configuran y salen.
 | `set_entry_annunciator` | `enabled: bool` | `<ic>PPpP776<N>F` | Avisador acústico de entrada |
 | `set_battery_save` | `enabled: bool` | `<ic>PPpP886<N>F` | Modo ahorro de batería |
 | `set_owner_code_condition` | `disarm_only: bool` | `<ic>PPpP880<N>F` | 0=armar+desarmar, 1=solo desarmar |
+| `set_zone_conditionality` | `enabled: bool` | `<ic>PPpP884<N>F` | 0=no, 1=sí (condicionalidad zonas 2 y 4) |
 | `set_wired_zones` | `enabled: bool` | `<ic>PPpP885<N>F` | 0=deshabilitar, 1=habilitar zonas alámbricas |
 | `set_partition_merge` | `enabled: bool` | `<ic>PPpP888<N>F` | 0=independientes, 1=hermanar particiones |
 | `set_pgm_output` | `output, option, partition` | `<ic>PPpP77OOPF` | Configurar salida PGM |
@@ -393,7 +394,7 @@ Servicios autocontenidos: entran a programación avanzada, configuran y salen.
 | `set_tamper_zone` | — | `<ic>PPpP998F` | Designa zona como tamper |
 | `toggle_zone_in_mode` | `zone: 1–N` | `Z<NN>` | Incluye/excluye zona en modo* |
 
-`type` para `set_zone_type`: `normal` (robo normal, P994), `output_b` (solo sirena B, P991), `output_ab` (sirenas A+B, P992), `fire` (incendio, P993), `robbery` (robo normal, P994), `24h_protection` (protección 24h, P995, zonas 9–16), `fast_robbery` (robo rápida, P996, zonas 1–8).
+`type` para `set_zone_type`: `normal` (robo normal, P994), `output_b` (solo sirena B, P991), `output_ab` (sirenas A+B, P992), `fire` (incendio, P993), `robbery` (robo normal, P994), `24h_protection` (protección 24h, P995), `fast_robbery` (robo rápida, P996). El rango de zonas depende del modelo.
 
 #### Gestión de Códigos
 
@@ -476,10 +477,10 @@ x28_alarm:
 ## Compatibilidad de Modelos
 
 Todas las centrales de la serie N (N4-MPXH, N8-MPXH, N8F-MPXH, N16-MPXH,
-N32-MPXH) y la serie 900X (9002-MPX, 9003-MPX, 9004-MPX) comparten el mismo
-protocolo MPX/MPXH. El parámetro `model` ajusta la validación de zonas y
-capacidades. En modo `AUTO`, el componente usa 8 zonas MPXH + 8 cableadas
-por defecto.
+N32-MPXH, N32F-MPXH) y la serie 900X (9002-MPX, 9003-MPX, 9004-MPX) comparten
+el mismo protocolo MPX/MPXH. El parámetro `model` ajusta la validación de
+zonas y capacidades. En modo `AUTO`, el componente usa 32 zonas MPXH + 8
+cableadas por defecto.
 
 ## Secuencias de Armado/Desarmado
 
@@ -494,7 +495,7 @@ antes de enviar el PIN.
 
 ## Códigos de Zona Personalizados
 
-Si los códigos de zona predeterminados (Z5–Z8) no coinciden con tu central,
+Si los códigos de zona generados automáticamente no coinciden con tu central,
 puedes sobrescribirlos:
 
 ```yaml
@@ -502,11 +503,10 @@ x28_alarm:
   zone_codes:
     5: 0x1655
     6: 0x1663
-    7: 0x9670
-    8: 0x1680
 ```
 
-Usa el sniffer para capturar los códigos reales de tu panel.
+Usa el sniffer para capturar los códigos reales de tu panel. Las sobreescrituras
+reemplazan la coincidencia tanto de MPXH como de cableado para la zona indicada.
 
 ## Solución de Problemas
 
