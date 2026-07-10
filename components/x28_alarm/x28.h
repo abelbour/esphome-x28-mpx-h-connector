@@ -33,30 +33,6 @@ enum class X28Model : uint8_t {
   _9004_MPX,
 };
 
-struct X28ModelCapabilities {
-  uint8_t max_mpxh_zones;
-  uint8_t max_wired_zones;
-  bool has_partitions;
-  bool has_p888;
-  bool supports_wired;
-};
-
-constexpr X28ModelCapabilities get_model_capabilities(X28Model model) {
-  switch (model) {
-    case X28Model::N4_MPXH:   return {4,  6,  true,  false, true};
-    case X28Model::N8_MPXH:   return {8,  8,  true,  false, true};
-    case X28Model::N8F_MPXH:  return {8,  0,  true,  false, false};
-    case X28Model::N16_MPXH:  return {16, 8,  true,  true,  true};
-    case X28Model::N32_MPXH:  return {32, 8,  true,  true,  true};
-    case X28Model::N32F_MPXH: return {32, 0,  true,  true,  false};
-    case X28Model::_9002_MPX: return {0,  2,  false, false, true};
-    case X28Model::_9003_MPX: return {0,  3,  false, false, true};
-    case X28Model::_9004_MPX: return {0,  4,  false, false, true};
-    case X28Model::AUTO:
-    default:                  return {8,  8,  true,  false, true};
-  }
-}
-
 // ─── Packet codes ──────────────────────────────────────────────────────
 enum MPXCode : uint16_t {
   MPX_CODE_KEY_0           = 0x0000,

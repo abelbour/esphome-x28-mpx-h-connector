@@ -4,8 +4,6 @@ from esphome import pins
 from esphome.components import binary_sensor
 from esphome.const import (
     CONF_ID,
-    CONF_PIN,
-    CONF_INVERTED,
     CONF_CODE,
 )
 

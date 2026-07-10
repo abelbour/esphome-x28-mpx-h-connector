@@ -559,6 +559,11 @@ void X28Alarm::on_event(uint16_t word) {
     }
   }
 
+  if (bus_.is_keyboard_code(word)) {
+    ESP_LOGV(TAG, "KBD code 0x%04X", word);
+    return;
+  }
+
   switch (word) {
     case MPX_CODE_ALARM_ARMED:
       armed_confirmed_ = true;
@@ -569,7 +574,7 @@ void X28Alarm::on_event(uint16_t word) {
             last_mode_ == MPX_CODE_ESTOY
                 ? alarm_control_panel::ACP_STATE_ARMED_HOME
                 : alarm_control_panel::ACP_STATE_ARMED_AWAY);
-      break;
+      return;
 
     case MPX_CODE_ALARM_DISARMED:
       armed_confirmed_ = false;
@@ -579,26 +584,21 @@ void X28Alarm::on_event(uint16_t word) {
         acp_->publish_state(alarm_control_panel::ACP_STATE_DISARMED);
       if (estoy_sensor_)
         estoy_sensor_->publish_state(false);
-      break;
+      return;
 
     case MPX_CODE_ESTOY:
       last_mode_ = MPX_CODE_ESTOY;
       mode_waiting_ = false;
       if (estoy_sensor_)
         estoy_sensor_->publish_state(true);
-      break;
+      return;
 
     case MPX_CODE_ME_VOY:
       last_mode_ = MPX_CODE_ME_VOY;
       mode_waiting_ = false;
       if (estoy_sensor_)
         estoy_sensor_->publish_state(false);
-      break;
-  }
-
-  if (bus_.is_keyboard_code(word)) {
-    ESP_LOGV(TAG, "KBD code 0x%04X", word);
-    return;
+      return;
   }
 
   on_packet(word);

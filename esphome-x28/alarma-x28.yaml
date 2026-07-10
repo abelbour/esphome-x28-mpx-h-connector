@@ -40,11 +40,10 @@ alarm_control_panel:
 
 binary_sensor:
   - platform: x28_alarm
-    type: zone
     zone: 1
     name: "Zona 1"
 
 button:
   - platform: x28_alarm
-    type: panic
+    action: PANIC
     name: "Panico"
