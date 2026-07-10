@@ -6,6 +6,7 @@
 #include "esphome/components/alarm_control_panel/alarm_control_panel.h"
 #include "esphome/components/binary_sensor/binary_sensor.h"
 #include "esphome/components/button/button.h"
+#include "esphome/components/switch/switch.h"
 #include "esphome/components/text_sensor/text_sensor.h"
 
 namespace esphome {
@@ -195,6 +196,8 @@ class MPXBus {
   static MPXBus *instance_;
 };
 
+class X28SnifferSwitch;
+
 // ─── X28Alarm ──────────────────────────────────────────────────────────
 class X28Alarm : public Component {
  public:
@@ -211,7 +214,10 @@ class X28Alarm : public Component {
   void set_invert_rx(bool inv) { invert_rx_ = inv; }
   void set_invert_tx(bool inv) { invert_tx_ = inv; }
   void set_debug(bool debug) { debug_ = debug; }
-  void set_sniffing_enabled(bool en) { sniffing_enabled_ = en; }
+  void set_sniffing_enabled(bool en) {
+    sniffing_enabled_ = en;
+    if (sniffer_switch_) sniffer_switch_->publish_state(en);
+  }
   void set_sniffing_throttle(uint32_t ms) { sniffing_throttle_ms_ = ms; }
   void set_zone_debounce_ms(uint32_t ms) { zone_debounce_ms_ = ms; }
   void set_zone_code_override(uint8_t zone, uint16_t code) {
@@ -227,6 +233,7 @@ class X28Alarm : public Component {
   void set_estoy_sensor(binary_sensor::BinarySensor *s) { estoy_sensor_ = s; }
   void set_zone_sensor(uint8_t zone, binary_sensor::BinarySensor *s);
   void set_sniffer_text_sensor(text_sensor::TextSensor *s) { sniffer_text_ = s; }
+  void set_sniffer_switch(X28SnifferSwitch *s) { sniffer_switch_ = s; }
 
   // ── Services ──
   void send_keys_service(const std::string &keys);
@@ -314,6 +321,7 @@ class X28Alarm : public Component {
   binary_sensor::BinarySensor *estoy_sensor_{nullptr};
   binary_sensor::BinarySensor *zone_sensors_[MAX_ZONES]{};
   text_sensor::TextSensor *sniffer_text_{nullptr};
+  X28SnifferSwitch *sniffer_switch_{nullptr};
 
   std::vector<VirtualZoneState> virtual_zones_;
   uint16_t zone_code_overrides_[MAX_ZONES + 1]{};
@@ -348,6 +356,18 @@ class X28ActionButton : public button::Button {
   X28Alarm *parent_{nullptr};
   uint16_t code_{0};
   uint16_t long_code_{0};
+};
+
+// ─── X28SnifferSwitch ──────────────────────────────────────────────────────
+class X28SnifferSwitch : public switch_::Switch, public Component {
+ public:
+  void set_parent(X28Alarm *parent) { parent_ = parent; }
+
+ protected:
+  void write_state(bool state) override;
+
+ private:
+  X28Alarm *parent_{nullptr};
 };
 
 }  // namespace x28_alarm

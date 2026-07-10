@@ -4,11 +4,10 @@ from esphome import pins
 from esphome.components import binary_sensor
 from esphome.const import (
     CONF_ID,
-    CONF_CODE,
 )
 
 DEPENDENCIES = []
-AUTO_LOAD = ["alarm_control_panel", "binary_sensor", "button", "text_sensor"]
+AUTO_LOAD = ["alarm_control_panel", "binary_sensor", "button", "text_sensor", "switch"]
 MULTI_CONF = False
 
 x28_alarm_ns = cg.esphome_ns.namespace("x28_alarm")
@@ -31,7 +30,6 @@ X28_MODEL_OPTIONS = {
 CONF_RX_PIN = "rx_pin"
 CONF_TX_PIN = "tx_pin"
 CONF_MODEL = "model"
-CONF_INSTALLER_CODE = "installer_code"
 CONF_INVERT_RX = "invert_rx"
 CONF_INVERT_TX = "invert_tx"
 CONF_DEBUG = "debug"
@@ -47,12 +45,6 @@ CONF_TRIGGER = "trigger"
 CONF_ZONE_TYPE = "zone_type"
 CONF_CLEAR_ON_CLOSE = "clear_on_close"
 CONF_ZONE_CODES = "zone_codes"
-
-CODE_VALIDATOR = cv.All(
-    cv.string_strict,
-    cv.Length(min=4, max=6),
-    cv.is_number,
-)
 
 VIRTUAL_ZONE_SCHEMA = cv.Schema({
     cv.Required(CONF_ZONE): cv.int_range(1, 32),
@@ -71,10 +63,6 @@ CONFIG_SCHEMA = cv.Schema({
     cv.GenerateID(): cv.declare_id(X28Alarm),
     cv.Required(CONF_RX_PIN): pins.gpio_input_pin_schema,
     cv.Required(CONF_TX_PIN): pins.gpio_output_pin_schema,
-    cv.Required(CONF_CODE): CODE_VALIDATOR,
-    cv.Optional(CONF_INSTALLER_CODE, default="467825"): cv.All(
-        cv.string_strict, cv.Length(min=6, max=6), cv.is_number,
-    ),
     cv.Optional(CONF_MODEL, default="AUTO"): cv.enum(X28_MODEL_OPTIONS, upper=True),
     cv.Optional(CONF_INVERT_RX, default=True): cv.boolean,
     cv.Optional(CONF_INVERT_TX, default=True): cv.boolean,
@@ -98,8 +86,6 @@ async def to_code(config):
     tx_pin = await cg.gpio_pin_expression(config[CONF_TX_PIN])
     cg.add(var.set_tx_pin(tx_pin))
 
-    cg.add(var.set_code(config[CONF_CODE]))
-    cg.add(var.set_installer_code(config[CONF_INSTALLER_CODE]))
     cg.add(var.set_model(config[CONF_MODEL]))
     cg.add(var.set_invert_rx(config[CONF_INVERT_RX]))
     cg.add(var.set_invert_tx(config[CONF_INVERT_TX]))

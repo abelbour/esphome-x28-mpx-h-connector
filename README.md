@@ -134,7 +134,6 @@ cualquier topología.
 x28_alarm:
   rx_pin: GPIO22
   tx_pin: GPIO23
-  code: "282828"
 ```
 
 ### Completa
@@ -148,8 +147,6 @@ x28_alarm:
   tx_pin:
     number: GPIO23
     inverted: true
-  code: "282828"            # PIN de usuario (4-6 dígitos)
-  installer_code: "467825"  # Código de instalador (6 dígitos, opcional)
   model: N8F-MPXH           # Opcional: AUTO, N4-MPXH, N8-MPXH, N8F-MPXH,
                             #          N16-MPXH, N32-MPXH, 9002-MPX, 9003-MPX, 9004-MPX
   debug: true
@@ -165,6 +162,8 @@ x28_alarm:
   zone_debounce_ms: 500     # Duración de zona activada antes de auto-limpiar
 ```
 
+> **Nota:** El código de usuario (`code`) y el código de instalador no se configuran en YAML. Se establecen en tiempo de ejecución mediante los servicios `change_owner_code` y `change_installer_code`. El código de instalador predeterminado es `467825`.
+
 ### Parámetros
 
 | Parámetro              | Tipo      | Requerido | Por defecto | Descripción                                |
@@ -172,8 +171,6 @@ x28_alarm:
 | `id`                   | string    | no        | —           | ID del componente para referencias         |
 | `rx_pin`               | pin       | sí        | —           | Pin de entrada conectado al bus MPX        |
 | `tx_pin`               | pin       | sí        | —           | Pin de salida que conduce el bus           |
-| `code`                 | string    | sí        | —           | PIN de usuario (4–6 dígitos numéricos)     |
-| `installer_code`       | string    | no        | `467825`    | Código de instalador (6 dígitos)          |
 | `model`                | string    | no        | `AUTO`      | Modelo de central X-28                     |
 | `invert_rx`            | boolean   | no        | `true`      | Invertir señal RX                          |
 | `invert_tx`            | boolean   | no        | `true`      | Invertir señal TX                          |
@@ -316,6 +313,18 @@ text_sensor:
 ```
 
 Solo disponible cuando `sniffing.enabled: true`.
+
+### Interruptor (`switch` — Control de Sniffer)
+
+```yaml
+switch:
+  - platform: x28_alarm
+    name: "Activar Sniffer"
+```
+
+Permite activar/desactivar el rastreo del bus desde la UI de Home Assistant
+sin necesidad de recompilar. El estado inicial se define en YAML mediante
+`sniffing.enabled`.
 
 ## Servicios
 

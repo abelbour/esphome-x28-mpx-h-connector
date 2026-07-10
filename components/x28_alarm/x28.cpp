@@ -343,7 +343,8 @@ void X28Alarm::dump_config() {
   ESP_LOGCONFIG(TAG, "  TX Pin: GPIO%d (invert: %s)",
                 tx_pin_->get_pin(), invert_tx_ ? "YES" : "NO");
   ESP_LOGCONFIG(TAG, "  Code: %s, Installer Code: %s",
-                code_.c_str(), installer_code_.c_str());
+                code_.empty() ? "(not set)" : code_.c_str(),
+                installer_code_.c_str());
   ESP_LOGCONFIG(TAG, "  Debug: %s, Sniffing: %s",
                 debug_ ? "YES" : "NO", sniffing_enabled_ ? "YES" : "NO");
   ESP_LOGCONFIG(TAG, "  Zone debounce: %d ms", zone_debounce_ms_);
@@ -367,6 +368,10 @@ void X28Alarm::send_keys_service(const std::string &keys) {
 
 // ─── Programming Service Helper ──────────────────────────────────────────
 void X28Alarm::send_programmed_sequence(const std::string &body, bool use_installer, bool advanced, bool exit_f) {
+  if (!use_installer && code_.empty()) {
+    ESP_LOGW(TAG, "Owner code not set — use change_owner_code service first");
+    return;
+  }
   const std::string &prefix = use_installer ? installer_code_ : code_;
   char buf[48];
   size_t pos = 0;
@@ -496,6 +501,10 @@ void X28Alarm::program_user_service(int user, const std::string &code, int permi
     ESP_LOGW(TAG, "Invalid permissions %d, must be 0-4", permissions);
     return;
   }
+  if (code_.empty()) {
+    ESP_LOGW(TAG, "Owner code not set — use change_owner_code service first");
+    return;
+  }
   std::string seq = code_ + "PPF2633P";
   char buf[4];
   snprintf(buf, sizeof(buf), "%02d", user);
@@ -510,6 +519,10 @@ void X28Alarm::program_user_service(int user, const std::string &code, int permi
 }
 
 void X28Alarm::rf_learn_mode_service() {
+  if (code_.empty()) {
+    ESP_LOGW(TAG, "Owner code not set — use change_owner_code service first");
+    return;
+  }
   std::string seq = code_ + "PPF2337";
   bus_.send_keys(seq);
 }
@@ -637,6 +650,10 @@ void X28Alarm::toggle_mode(uint16_t target_mode) {
 
 // ─── HA Actions ─────────────────────────────────────────────────────────
 void X28Alarm::arm_away() {
+  if (code_.empty()) {
+    ESP_LOGW(TAG, "Owner code not set — use change_owner_code service first");
+    return;
+  }
   toggle_mode(MPX_CODE_ME_VOY);
   bus_.send_keys(code_);
   arm_pending_start_ = millis();
@@ -648,6 +665,10 @@ void X28Alarm::arm_away() {
 }
 
 void X28Alarm::arm_home() {
+  if (code_.empty()) {
+    ESP_LOGW(TAG, "Owner code not set — use change_owner_code service first");
+    return;
+  }
   toggle_mode(MPX_CODE_ESTOY);
   bus_.send_keys(code_);
   arm_pending_start_ = millis();
@@ -659,6 +680,10 @@ void X28Alarm::arm_home() {
 }
 
 void X28Alarm::disarm() {
+  if (code_.empty()) {
+    ESP_LOGW(TAG, "Owner code not set — use change_owner_code service first");
+    return;
+  }
   bus_.send_keys(code_);
   arm_pending_start_ = millis();
   arm_pending_ = true;
@@ -794,6 +819,13 @@ void X28ActionButton::press_action() {
     delay(LONG_PRESS_DELAY_MS);
     parent_->send_packet(long_code_);
   }
+}
+
+// ─── X28SnifferSwitch ──────────────────────────────────────────────────────
+void X28SnifferSwitch::write_state(bool state) {
+  if (!parent_) return;
+  parent_->set_sniffing_enabled(state);
+  publish_state(state);
 }
 
 }  // namespace x28_alarm

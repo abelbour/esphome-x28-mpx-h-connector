@@ -676,7 +676,6 @@ components/
 x28_alarm:
   rx_pin: GPIO22
   tx_pin: GPIO23
-  code: "282828"
 
 # ─── Full configuration ──────────────────────────────────────────────────
 
@@ -688,7 +687,6 @@ x28_alarm:
   tx_pin:
     number: GPIO23
     inverted: true          # default: true
-  code: "282828"            # alarm code (4-6 digits)
   model: N8F-MPXH           # optional: model override (default: AUTO)
   debug: true               # enable verbose ESP_LOGV output
   sniffing:
@@ -773,8 +771,6 @@ button:
 | `id`                | string    | no       | —        | Component ID for referencing |
 | `rx_pin`            | pin       | yes      | —        | Input pin connected to MPX bus |
 | `tx_pin`            | pin       | yes      | —        | Output pin driving the bus |
-| `code`              | string    | yes      | —        | Owner alarm code (4-6 digits, e.g. "282828") |
-| `installer_code`    | string    | no       | `"467825"` | Installer code for programming operations (6 digits) |
 | `model`             | string    | no       | `AUTO`   | X-28 model for capability checks (see §3.2) |
 | `invert_tx`         | boolean   | no       | `true`   | Invert TX signal |
 | `invert_rx`         | boolean   | no       | `true`   | Invert RX signal |
@@ -1235,7 +1231,7 @@ needed.
 | `set_partition_merge` | `enabled: bool` | `<ic>PPpP888<N>F` | Merge partitions (N16/N32) |
 | `set_pgm_output` | `output, option, partition` | `<ic>PPpP77OOPF` | PGM0/1/2 behavior |
 
-Note: `<ic>` is the installer code from config (default `467825`).
+Note: `<ic>` is the installer code (default factory code `467825`). Both the owner code (`code`) and installer code are **not configured in YAML** — they are set at runtime via the `change_owner_code` and `change_installer_code` services (see §7.9.4). The installer code defaults to `467825` on first boot.
 RF learning services (`rf_learn_mode`, `rf_learn_slot`, `rf_delete_slot`,
 `exit_rf_learning`) are only registered for models with `has_rf_learning == true`.
 The `set_wired_zones` service is only registered for models with
@@ -2122,6 +2118,7 @@ but builds on transmission primitives from `x28-mpx-controller`:
 | `button` | `button.x28_panic` | Panic alarm |
 | `button` | `button.x28_fire` | Fire alarm |
 | `text_sensor` | `text_sensor.x28_sniffer` | Latest bus packet (when sniffing enabled) |
+| `switch` | `switch.x28_sniffer` | Toggle sniffing on/off at runtime |
 | `sensor` (future) | `sensor.x28_bus_*` | Diagnostics (when diagnostics enabled) |
 | `number` (future) | `number.x28_entry_delay` | Entry delay seconds |
 | `number` (future) | `number.x28_exit_delay` | Exit delay seconds |
@@ -2219,7 +2216,6 @@ x28_alarm:
   id: x28
   rx_pin: 22
   tx_pin: 23
-  code: !secret alarm_code
   model: N8F-MPXH
   debug: true
   sniffing:
@@ -2266,6 +2262,10 @@ button:
 text_sensor:
   - platform: x28_alarm
     name: "Bus Sniffer"
+
+switch:
+  - platform: x28_alarm
+    name: "Sniffer Toggle"
 ```
 
 ## 17. Appendix: Glossary (Extended)
