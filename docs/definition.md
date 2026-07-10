@@ -1134,7 +1134,7 @@ All P-codes are entered from advanced programming mode. The table below is sourc
 - P 888 requires a partition plug-in board (E1P, E3P, or E7P series)
 - P 995 applies to zones 9–16 only (requires N16+ with sufficient zones)
 - P 996 is for seismic/impact detectors (robo rápida)
-- P-codes P 770–P 772 (PGM) set output behavior based on system states (0=not assigned, 1=activated, 2=ready, 3=Estoy, 4=MeVoy, 5=alarm, 6=follow, 7=phone line fail, 8=mains fail, 9=unassigned); partition defaults to 1. Values per official N-series manual: 1=Activada, 0=No asignada.
+- P-codes P 770–P 772 (PGM) set output behavior based on system states (0=No asignada, 1=Activada, 2=Lista, 3=Modo Estoy, 4=Modo Me Voy, 5=Alarma disparada, 6=Pedido de ayuda (4s monostable), 7=Asalto (4s monostable), 8=Falta línea, 9=Falta red); partition defaults to 1. Values per official N-series manual.
 
 **Note on P-code range overlap:** P-codes in the 880–889 range are shared between the central panel and keypad programming, but accessed via different entry sequences:
 - **Central panel:** Enter via `<code>PPp` (advanced programming)
@@ -1154,11 +1154,11 @@ and exits (F).
 
 | Action                              | Sequence |
 |-------------------------------------|----------|
-| Program user 02 with code 1234 (arm all, can disarm) | `<code>PPF2633P0204123411F` |
-| Program user 02 with code 1234 (estoy only, can disarm) | `<code>PPF2633P0204123411F` |
+| Program user 02 with code 1234 (arm all, can disarm) | `<code>PPF2633P024123411F` |
+| Program user 02 with code 1234 (estoy only, can disarm) | `<code>PPF2633P024123411F` |
 
 Sequence breakdown: `F2633` = user code programming command. `P02` = user number 02.
-`04` = code length 4 digits. `1234` = the code. `1` = arm permissions (see below).
+`4` = code length (single digit). `1234` = the code. `1` = arm permissions (see below).
 `1` = can disarm. `F` = exit.
 
 **Arm permission values:**
@@ -1184,7 +1184,7 @@ Sequence breakdown: `F2633` = user code programming command. `P02` = user number
 
 | Action                              | Sequence |
 |-------------------------------------|----------|
-| Toggle zone 1 in current mode       | `Z01` (repeated toggles: included ↔ demorada ↔ excluded) |
+| Toggle zone 1 in current mode       | `Z01` (or `Z1` on N4/N8/N8F models; repeated toggles: included ↔ demorada ↔ excluded) |
 | Save current config as Estoy mode   | `<code>PPpP7781F` |
 | Save current config as Me Voy mode  | `<code>PPpP7782F` |
 
@@ -1237,14 +1237,15 @@ needed.
 
 | Service | Parameters | Sequence sent | Description |
 |---------|-----------|---------------|-------------|
-| `set_entry_delay` | `seconds: 5–99` | `<ic>PPpP881<SS>F` | Entry delay in seconds |
+| `set_entry_delay` | `seconds: 15–99` | `<ic>PPpP881<SS>F` | Entry delay in seconds |
 | `set_exit_delay` | `seconds: 15–99` | `<ic>PPpP882<SS>F` | Exit delay in seconds |
 | `set_siren_duration` | `minutes: 1–12` | `<ic>PPpP883<MM>F` | Siren A on-time in minutes |
 | `set_siren_b_duration` | `minutes: 1–12` | `<ic>PPpP775<MM>F` | Siren B on-time in minutes |
 | `set_clock_source` | `crystal: bool` | `<ic>PPpP777<N>F` | 0=grid (50Hz), 1=crystal |
-| `set_sabotage_inhibit` | `enabled: bool` | `<ic>PPpP774<N>F` | 0=normal, 1=inhibited |
+| `set_sabotage_inhibit` | `enabled: bool` | `<ic>PPpP774<N>F` | 0=normal (habilitado), 1=inhibited — `enabled: true` INHIBITS sabotage |
 | `set_ac_frequency` | `hz: 50\|60` | `<ic>PPpP773<N>F` | AC mains frequency |
 | `set_entry_annunciator` | `enabled: bool` | `<ic>PPpP776<N>F` | Entry beep on/off |
+| `set_annunciator_gap` | `seconds: 0–99` | `<ic>PPpP887<SS>F` | Annunciator beep interval in seconds (default 8) |
 | `set_battery_save` | `enabled: bool` | `<ic>PPpP886<N>F` | Battery save mode |
 | `set_owner_code_condition` | `disarm_only: bool` | `<ic>PPpP880<N>F` | 0=arm+disarm, 1=disarm only |
 | `set_zone_conditionality` | `enabled: bool` | `<ic>PPpP884<N>F` | 0=no, 1=yes (zones 2 & 4 conditionality) |
@@ -1317,14 +1318,15 @@ data:
 |---------|-----------|---------------|-------------|
 | `change_owner_code` | `new_code: 4–6 digits` | `<ic>PP<new_code>` | Changes the owner PIN. Uses the installer code (`<ic>`) to enter programming, per official procedure. |
 | `change_installer_code` | `new_code: 6 digits` | `<ic>PPpP889<new_code>F` | Changes the installer code. Requires current installer code. |
-| `program_user` | `user: 1–30`, `code: 4–6 digits`, `permissions: 0–4`, `can_disarm: bool` | `<code>PPF2633P<NN><LL><CODE><AP><DP>F` | Programs a user code with permissions |
+| `program_user` | `user: 2–31`, `code: 4–6 digits`, `permissions: 0–4`, `can_disarm: bool` | `<code>PPF2633P<NN><L><CODE><AP><DP>F` | Programs a user code with permissions |
 
 **`program_user` parameters in detail:**
 
 | Param | Values | Description |
 |-------|--------|-------------|
-| `user` | 1–30 | User number (01–30) |
+| `user` | 2–31 | User number (02–31) |
 | `code` | 4–6 digits | The user's PIN |
+| `code_len` | N/A (auto) | Code length sent as single digit (2–6), not zero-padded |
 | `permissions` | 0=register, 1=Estoy, 2=Me Voy, 3=Any, 4=Assault | Arm permission level |
 | `can_disarm` | bool | Whether user can disarm |
 
@@ -1477,80 +1479,40 @@ private:
 
 ```cpp
 class MPXBus {
-public:
-    // Timing constants
-    static constexpr uint32_t BIT_TIME  = 1270;
-    static constexpr uint32_t ZERO_TIME = 2000;
-    static constexpr uint32_t IDLE_TIME = 5000;
-    static constexpr uint32_t CTS_TIME  = 25000;
-    static constexpr size_t   BUFFER_SIZE = 64;
+ public:
+  void setup(InternalGPIOPin *rx_pin, InternalGPIOPin *tx_pin,
+             bool invert_rx, bool invert_tx);
+  void loop();
+  void send_packet(uint16_t payload);
+  void send_key(uint8_t key_index);
+  void send_keys(const std::string &keys);
+  void send_keys(const char *keys, size_t len);
 
-    MPXBus();
-    ~MPXBus();
+  void set_event_callback(std::function<void(uint16_t)> callback) {
+    event_callback_ = callback;
+  }
 
-    // Configuration
-    void set_rx_pin(InternalGPIOPin *pin, bool invert);
-    void set_tx_pin(InternalGPIOPin *pin, bool invert);
-    
-    // Lifecycle
-    void setup();
-    void loop();  // call from main loop()
+  bool is_keyboard_code(uint16_t code);
 
-    // Transmit
-    void send_key(MPXKey key);
-    void send_keys(const std::string &keys);
-    void send_packet(uint16_t word);
-    void send_keys_service(const std::string &keys);
+ protected:
+  static void interrupt_handler();
 
-    // Callbacks
-    using EventCallback = std::function<void(MPXEvent event)>;
-    using PacketCallback = std::function<void(uint16_t word)>;
-    using ZoneCallback = std::function<void(uint8_t zone, bool triggered)>;
-    
-    void set_event_callback(EventCallback cb);
-    void set_packet_callback(PacketCallback cb);   // for sniffer
-    void set_zone_callback(ZoneCallback cb);
+  InternalGPIOPin *rx_pin_{nullptr};
+  InternalGPIOPin *tx_pin_{nullptr};
+  bool invert_rx_{true};
+  bool invert_tx_{true};
+  uint8_t rx_pin_num_{0};
+  uint8_t tx_pin_num_{0};
+  bool rx_idle_level_{false};
 
-    // Debug
-    void set_debug(bool enabled);
-    void set_debug_logger(std::function<void(const std::string &)> logger);
+  CircularBuffer buffer_;
+  uint16_t recbuf_{0};
+  uint8_t bit_number_{0};
+  uint32_t prev_micros_{0};
 
-private:
-    // ISR (static, accesses instance via global pointer)
-    friend void IRAM_ATTR mpxbus_interrupt_handler();
-    static MPXBus *instance_;
-    
-    void enable_transmit();
-    void disable_transmit();
-    void handle_packet(uint16_t word);
-    bool is_keyboard_code(uint16_t word) const;
-    void debug_packet(uint16_t word, bool out);
-    void debug_log(const std::string &msg);
+  std::function<void(uint16_t)> event_callback_;
 
-    // State
-    InternalGPIOPin *rx_pin_ = nullptr;
-    InternalGPIOPin *tx_pin_ = nullptr;
-    bool invert_rx_ = true;
-    bool invert_tx_ = true;
-    bool debug_ = false;
-    
-    // ISR state
-    CircularBuffer buffer_;
-    uint16_t received_buffer_ = 0;
-    uint16_t bit_number_ = 0;
-    uint32_t previous_micros_ = 0;
-    
-    // Transmit state
-    uint32_t last_tx_time_ = 0;
-    
-    // Callbacks
-    EventCallback event_cb_;
-    PacketCallback packet_cb_;
-    ZoneCallback zone_cb_;
-    std::function<void(const std::string &)> logger_;
-    
-    // Keyboard code lookup
-    static const uint16_t KEYBOARD_CODES[25];
+  static MPXBus *instance_;
 };
 ```
 
@@ -1597,6 +1559,7 @@ class X28Alarm : public Component {
   void set_sabotage_inhibit_service(bool enabled);
   void set_ac_frequency_service(int hz);
   void set_entry_annunciator_service(bool enabled);
+  void set_annunciator_gap_service(int seconds);
   void set_battery_save_service(bool enabled);
   void set_owner_code_condition_service(bool disarm_only);
   void set_zone_conditionality_service(bool enabled);

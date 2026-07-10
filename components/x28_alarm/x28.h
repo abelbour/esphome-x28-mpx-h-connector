@@ -248,6 +248,7 @@ class X28Alarm : public Component {
   void set_sabotage_inhibit_service(bool enabled);
   void set_ac_frequency_service(int hz);
   void set_entry_annunciator_service(bool enabled);
+  void set_annunciator_gap_service(int seconds);
   void set_battery_save_service(bool enabled);
   void set_owner_code_condition_service(bool disarm_only);
   void set_zone_conditionality_service(bool enabled);

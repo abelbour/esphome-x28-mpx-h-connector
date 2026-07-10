@@ -47,7 +47,6 @@ void MPXBus::setup(InternalGPIOPin *rx_pin, InternalGPIOPin *tx_pin,
   rx_idle_level_ = !invert_rx;
 
   rx_pin_->setup();
-  tx_pin_->setup();
 
   attachInterrupt(digitalPinToInterrupt(rx_pin_num_),
                   interrupt_handler, CHANGE);
@@ -199,8 +198,11 @@ void MPXBus::send_keys(const char *keys, size_t len) {
       send_packet(0x813C);
     } else if (c == 'M')
       send_key(13);
-    else if (c == 'Z')
+    else if (c == 'Z') {
       send_packet(0x00CF);
+      delay(KEY_DELAY_MS);
+      send_packet(0x0000);
+    }
     else if (c == 'L') {
       send_packet(0x00CF);
       delay(KEY_DELAY_MS);
@@ -252,6 +254,7 @@ void X28Alarm::setup() {
   register_service([this](bool enabled) { this->set_sabotage_inhibit_service(enabled); }, "set_sabotage_inhibit", {"enabled"});
   register_service([this](int hz) { this->set_ac_frequency_service(hz); }, "set_ac_frequency", {"hz"});
   register_service([this](bool enabled) { this->set_entry_annunciator_service(enabled); }, "set_entry_annunciator", {"enabled"});
+  register_service([this](int seconds) { this->set_annunciator_gap_service(seconds); }, "set_annunciator_gap", {"seconds"});
   register_service([this](bool enabled) { this->set_battery_save_service(enabled); }, "set_battery_save", {"enabled"});
   register_service([this](bool disarm_only) { this->set_owner_code_condition_service(disarm_only); }, "set_owner_code_condition", {"disarm_only"});
   register_service([this](bool enabled) { this->set_zone_conditionality_service(enabled); }, "set_zone_conditionality", {"enabled"});
@@ -405,9 +408,9 @@ void X28Alarm::exit_programming_service() {
 }
 
 void X28Alarm::set_entry_delay_service(int seconds) {
-  if (seconds < 5 || seconds > 99) {
-    ESP_LOGW(TAG, "Entry delay %d out of range (5-99), clamping", seconds);
-    seconds = (seconds < 5) ? 5 : 99;
+  if (seconds < 15 || seconds > 99) {
+    ESP_LOGW(TAG, "Entry delay %d out of range (15-99), clamping", seconds);
+    seconds = (seconds < 15) ? 15 : 99;
   }
   char buf[16];
   snprintf(buf, sizeof(buf), "P881%02d", seconds);
@@ -463,6 +466,16 @@ void X28Alarm::set_entry_annunciator_service(bool enabled) {
   send_programmed_sequence(std::string(body, 5), true, true);
 }
 
+void X28Alarm::set_annunciator_gap_service(int seconds) {
+  if (seconds < 0 || seconds > 99) {
+    ESP_LOGW(TAG, "Annunciator gap %d out of range (0-99), clamping", seconds);
+    seconds = (seconds < 0) ? 0 : 99;
+  }
+  char buf[16];
+  snprintf(buf, sizeof(buf), "P887%02d", seconds);
+  send_programmed_sequence(buf, true, true);
+}
+
 void X28Alarm::set_battery_save_service(bool enabled) {
   const char body[] = {'P', '8', '8', '6', enabled ? '1' : '0'};
   send_programmed_sequence(std::string(body, 5), true, true);
@@ -491,8 +504,8 @@ void X28Alarm::change_installer_code_service(const std::string &new_code) {
 }
 
 void X28Alarm::program_user_service(int user, const std::string &code, int permissions, bool can_disarm) {
-  if (user < 1 || user > 30) {
-    ESP_LOGW(TAG, "Invalid user %d, must be 1-30", user);
+  if (user < 2 || user > 31) {
+    ESP_LOGW(TAG, "Invalid user %d, must be 2-31", user);
     return;
   }
   size_t code_len = code.size();
@@ -512,7 +525,7 @@ void X28Alarm::program_user_service(int user, const std::string &code, int permi
   char buf[4];
   snprintf(buf, sizeof(buf), "%02d", user);
   seq += buf;
-  snprintf(buf, sizeof(buf), "%02d", (int)code_len);
+  snprintf(buf, sizeof(buf), "%01d", (int)code_len);
   seq += buf;
   seq += code;
   seq += '0' + permissions;
@@ -560,7 +573,8 @@ void X28Alarm::toggle_zone_in_mode_service(int zone) {
     return;
   }
   char buf[16];
-  snprintf(buf, sizeof(buf), "Z%02d", zone);
+  snprintf(buf, sizeof(buf),
+           model_capabilities_.max_mpxh_zones <= 8 ? "Z%01d" : "Z%02d", zone);
   bus_.send_keys(std::string(buf));
 }
 
@@ -586,8 +600,12 @@ void X28Alarm::set_zone_type_service(int zone, const std::string &type) {
   else if (type == "fast_robbery")            pcode = 996;
   else return;
 
+  if (pcode == 995 && zone <= 8) {
+    ESP_LOGW(TAG, "P995 (24h protection) is only valid for zones 9-32, got zone %d", zone);
+  }
   char buf[16];
-  snprintf(buf, sizeof(buf), "P%d%02d", pcode, zone);
+  const char *fmt = (model_capabilities_.max_mpxh_zones <= 8) ? "P%d%01d" : "P%d%02d";
+  snprintf(buf, sizeof(buf), fmt, pcode, zone);
   send_programmed_sequence(buf, true, true);
 }
 
