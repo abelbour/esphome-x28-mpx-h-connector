@@ -332,20 +332,20 @@ data:
 
 **Mapa de caracteres:**
 
-| Carácter | Tecla          | Código   |
-|----------|----------------|----------|
-| `0`–`9`  | Dígitos        | Según el dígito |
-| `P`      | P (corto)      | `0x00AC` |
-| `p`      | P (largo)      | `0x810A` |
-| `F`      | F (corto)      | `0x80BF` |
-| `f`      | F (largo)      | `0x813C` |
-| `M`      | MODO           | `0x80DC` |
-| `Z`      | ZONA (entrada) | `0x00CF` |
-| `L`      | ZONA (salida)  | `0x8169` |
-| `!`      | Pánico         | `0x80EA` |
-| `@`      | Fuego          | `0x00F9` |
-| `#`      | Pánico largo   | `0x012F` |
-| `*`      | Fuego largo    | `0x0119` |
+| Carácter | Tecla          | Secuencia enviada             |
+|----------|----------------|-------------------------------|
+| `0`–`9`  | Dígitos        | Código del dígito             |
+| `P`      | P (corto)      | `0x00AC`                      |
+| `p`      | P (largo)      | `0x00AC` + `0x810A`           |
+| `F`      | F (corto)      | `0x80BF`                      |
+| `f`      | F (largo)      | `0x80BF` + `0x813C`           |
+| `M`      | MODO           | `0x80DC`                      |
+| `Z`      | ZONA (entrada) | `0x00CF` + `0x0000`           |
+| `L`      | ZONA (salida)  | `0x00CF` + `0x8169`           |
+| `!`      | Pánico         | `0x80EA`                      |
+| `@`      | Fuego          | `0x00F9`                      |
+| `#`      | Pánico largo   | `0x80EA` + `0x012F`           |
+| `*`      | Fuego largo    | `0x00F9` + `0x0119`           |
 
 ### Servicios de Programación
 

@@ -198,7 +198,7 @@ x28_alarm:
 | `N4-MPXH` | N | 4 | 4+2 | No | Yes (plugin) |
 | `N8-MPXH` | N | 8 | 8 | No | Yes (plugin) |
 | `N8F-MPXH` | N | 8 | 0 | No | Yes (plugin) |
-| `N16-MPXH` | N | 16 | 8 | No | Yes (plugin) |
+| `N16-MPXH` | N | 16 | 8 | Yes | Yes (plugin) |
 | `N32-MPXH` | N | 32 | 8 | Yes | Yes (plugin) |
 | `9002-MPX` | 900X | 0 | 2 | No | No |
 | `9003-MPX` | 900X | 0 | 3 | No | No |

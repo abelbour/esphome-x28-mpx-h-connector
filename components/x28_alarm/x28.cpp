@@ -117,26 +117,39 @@ void MPXBus::send_keys(const std::string &keys) {
       send_key(c - '0');
     else if (c == 'P')
       send_key(10);
-    else if (c == 'p')
-      send_key(17);
-    else if (c == 'F')
+    else if (c == 'p') {
+      send_packet(0x00AC);
+      delay(150);
+      send_packet(0x810A);
+    } else if (c == 'F')
       send_key(11);
-    else if (c == 'f')
-      send_key(19);
-    else if (c == 'M')
+    else if (c == 'f') {
+      send_packet(0x80BF);
+      delay(150);
+      send_packet(0x813C);
+    } else if (c == 'M')
       send_key(13);
-    else if (c == 'Z')
-      send_key(12);
-    else if (c == 'L')
-      send_key(24);
-    else if (c == '!')
-      send_key(22);
+    else if (c == 'Z') {
+      send_packet(0x00CF);
+      delay(150);
+      send_packet(0x0000);
+    } else if (c == 'L') {
+      send_packet(0x00CF);
+      delay(150);
+      send_packet(0x8169);
+    } else if (c == '!')
+      send_key(14);
     else if (c == '@')
-      send_key(20);
-    else if (c == '#')
-      send_key(23);
-    else if (c == '*')
-      send_key(21);
+      send_key(15);
+    else if (c == '#') {
+      send_packet(0x80EA);
+      delay(150);
+      send_packet(0x012F);
+    } else if (c == '*') {
+      send_packet(0x00F9);
+      delay(150);
+      send_packet(0x0119);
+    }
     delay(150);
   }
 }

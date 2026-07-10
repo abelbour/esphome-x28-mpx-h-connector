@@ -7,6 +7,7 @@ build/
 # Cloned reference repos (keep locally, not in this repo)
 x28-mpx-controller/
 x28_sniffer/
+esphome-x28/
 
 # Scraped manual site (keep locally, not in this repo)
 docs/manuales-x-28/
