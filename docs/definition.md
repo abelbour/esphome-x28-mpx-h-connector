@@ -639,9 +639,9 @@ components/
     ├── binary_sensor.py       # Zone + Estoy binary sensors
     ├── button.py              # Panic, Fire buttons
     ├── text_sensor.py         # Sniffer output text sensor (optional)
-    ├── services.py            # send_keys HA service definition (optional, can be in __init__)
+    ├── switch.py              # Sniffer toggle switch entity
     ├── x28.h                  # C++ header: MPXBus, X28Alarm, packet types
-    └── x28.cpp                # C++ implementation (optional, can be header-only)
+    └── x28.cpp                # C++ implementation
 ```
 
 ### 6.2 Python Module Responsibilities
@@ -889,16 +889,14 @@ is transmitted.
 ### 7.4 Text Sensor (Sniffer Output)
 
 When `sniffing.enabled` is true, a `text_sensor` is created that publishes
-the latest decoded packet as a string:
+the latest decoded packet as a hex string:
 
 ```
-16987421: << 0x49C1 - parity:0 id:1 data:9C checksum:1 isKB:0
+0x49C1
 ```
 
-Format: `<timestamp_ms>: <direction> <hex_word> - parity:<p> id:<i> data:<d> checksum:<c> isKB:<0|1>`
-
-The `isKB` flag indicates whether the packet matches any known keyboard code.
-This helps distinguish keypad transmissions from sensor/panel transmissions.
+Keyboard codes are not published to the text sensor (they are filtered in
+the C++ event handler), but all packets appear in the ESP logs.
 
 ### 7.5 Sniffing Mode (Detailed)
 
@@ -921,9 +919,14 @@ Every valid packet received, including:
 
 **Log output (ESP_LOGV):**
 ```
-[X28] [16987421]: << 0x49C1 P:0 ID:1 D:9C CS:1 KB:no
-[X28] [16988432]: >> 0x8013 P:1 ID:0 D:13 CS:3 KB:KEY_1
-[X28] [16989450]: << 0x1615 P:0 ID:0 D:61 CS:5 KB:no
+PKT 0x49C1 P=0 ID=1 DATA=0x9C CS=1
+PKT 0x8013 P=1 ID=0 DATA=0x13 CS=3
+PKT 0x1615 P=0 ID=0 DATA=0x61 CS=5
+```
+
+Keyboard codes are logged separately at `ESP_LOGV`:
+```
+KBD code 0x8013
 ```
 
 **Text sensor throttling:**
@@ -1015,26 +1018,48 @@ fields:
 | `#` | KEY_PANIC_LONG | Panic long press |
 | `*` | KEY_FIRE_LONG | Fire long press |
 
-**Implementation in C++:**
+**Implementation in C++ (`MPXBus::send_keys`):**
 ```cpp
-void X28Alarm::send_keys_service(const std::string &keys) {
-    for (char c : keys) {
-        switch (c) {
-            case '0' ... '9': _bus.send_key((MPXKey)(c - '0')); break;
-            case 'P': _bus.send_key(MPX_KEY_P); break;
-            case 'p': _bus.send_key(MPX_KEY_P_LONG_PRESS); break;
-            case 'F': _bus.send_key(MPX_KEY_F); break;
-            case 'f': _bus.send_key(MPX_KEY_F_LONG_PRESS); break;
-            case 'M': _bus.send_key(MPX_KEY_MODO); break;
-            case 'Z': _bus.send_key(MPX_KEY_ZONA_IN); break;
-            case 'L': _bus.send_key(MPX_KEY_ZONA_OUT); break;
-            case '!': _bus.send_key(MPX_KEY_PANIC); break;
-            case '@': _bus.send_key(MPX_KEY_FIRE); break;
-            case '#': _bus.send_key(MPX_KEY_PANIC_LONG_PRESS); break;
-            case '*': _bus.send_key(MPX_KEY_FIRE_LONG_PRESS); break;
-        }
-        delay(MPX_KEY_INTERVAL);  // 150 ms between key presses
+void MPXBus::send_keys(const char *keys, size_t len) {
+  for (size_t i = 0; i < len; i++) {
+    char c = keys[i];
+    if (c >= '0' && c <= '9')
+      send_key(c - '0');
+    else if (c == 'P')
+      send_key(10);
+    else if (c == 'p') {
+      send_packet(0x00AC);
+      delay(KEY_DELAY_MS);
+      send_packet(0x810A);
+    } else if (c == 'F')
+      send_key(11);
+    else if (c == 'f') {
+      send_packet(0x80BF);
+      delay(KEY_DELAY_MS);
+      send_packet(0x813C);
+    } else if (c == 'M')
+      send_key(13);
+    else if (c == 'Z')
+      send_packet(0x00CF);
+    else if (c == 'L') {
+      send_packet(0x00CF);
+      delay(KEY_DELAY_MS);
+      send_packet(0x8169);
+    } else if (c == '!')
+      send_key(14);
+    else if (c == '@')
+      send_key(15);
+    else if (c == '#') {
+      send_packet(0x80EA);
+      delay(KEY_DELAY_MS);
+      send_packet(0x012F);
+    } else if (c == '*') {
+      send_packet(0x00F9);
+      delay(KEY_DELAY_MS);
+      send_packet(0x0119);
     }
+    delay(KEY_DELAY_MS);
+  }
 }
 ```
 
@@ -1105,7 +1130,7 @@ All P-codes are entered from advanced programming mode. The table below is sourc
 **Notes:**
 - Zone parameters use 1 digit for N4/N8/N8F and 2 digits for N16/N32/N32F
 - P 997 and P 998 are hardwired for zones 7 and 8 respectively (no zone parameter)
-- P 885 and P 888 are absent on "F" models (wireless-focused)
+- P 885 is absent on "F" models (no wired zone inputs)
 - P 888 requires a partition plug-in board (E1P, E3P, or E7P series)
 - P 995 applies to zones 9–16 only (requires N16+ with sufficient zones)
 - P 996 is for seismic/impact detectors (robo rápida)
@@ -1426,13 +1451,11 @@ public:
     uint16_t read();            // called from loop()
     bool is_empty() const;
     bool is_full() const;
-    void clear();
     
 private:
-    static const size_t SIZE = 64;
-    uint16_t buffer_[SIZE];
-    volatile size_t write_index_;
-    volatile size_t read_index_;
+    uint16_t buffer_[64];
+    volatile uint8_t write_index_ = 0;
+    volatile uint8_t read_index_ = 0;
 };
 ```
 
@@ -1535,126 +1558,122 @@ private:
 
 ```cpp
 class X28Alarm : public Component {
-public:
-     // ── Configuration ──
-    void set_rx_pin(InternalGPIOPin *pin) { rx_pin_ = pin; }
-    void set_tx_pin(InternalGPIOPin *pin) { tx_pin_ = pin; }
-    void set_code(const std::string &code) { code_ = code; }
-    void set_installer_code(const std::string &code) { installer_code_ = code; }
-    void set_invert_rx(bool inv) { invert_rx_ = inv; }
-    void set_invert_tx(bool inv) { invert_tx_ = inv; }
-    void set_debug(bool debug) { debug_ = debug; }
-    void set_sniffing_enabled(bool en) { sniffing_enabled_ = en; }
-    void set_sniffing_throttle(uint32_t ms) { sniffing_throttle_ms_ = ms; }
-    void set_zone_debounce_ms(uint32_t ms) { zone_debounce_ms_ = ms; }
-    void set_model(X28Model model) { model_ = model; }
-    
-    struct VirtualZoneState {
-      uint8_t zone;
-      uint16_t packet_code;
-      bool clear_on_close;
-      binary_sensor::BinarySensor *sensor;
-      bool trigger_on_open;
-      bool last_state;
-    };
-    void add_virtual_zone(uint8_t zone, uint16_t packet_code,
-                           bool clear_on_close, bool trigger_on_open,
-                           binary_sensor::BinarySensor *sensor);
+ public:
+  // ── Configuration ──
+  void set_rx_pin(InternalGPIOPin *pin) { rx_pin_ = pin; }
+  void set_tx_pin(InternalGPIOPin *pin) { tx_pin_ = pin; }
+  void set_code(const std::string &code) { code_ = code; }
+  void set_installer_code(const std::string &code) { installer_code_ = code; }
+  void set_model(X28Model model) { model_ = model; }
+  void set_invert_rx(bool inv) { invert_rx_ = inv; }
+  void set_invert_tx(bool inv) { invert_tx_ = inv; }
+  void set_debug(bool debug) { debug_ = debug; }
+  void set_sniffing_enabled(bool en);
+  void set_sniffing_throttle(uint32_t ms) { sniffing_throttle_ms_ = ms; }
+  void set_zone_debounce_ms(uint32_t ms) { zone_debounce_ms_ = ms; }
+  void set_zone_code_override(uint8_t zone, uint16_t code);
 
-    // ── Entity Registration ──
-    void set_alarm_control_panel(AlarmControlPanel *acp) { acp_ = acp; }
-    void set_estoy_sensor(binary_sensor::BinarySensor *s) { estoy_sensor_ = s; }
-    void set_zone_sensor(uint8_t zone, binary_sensor::BinarySensor *s);
-    void set_sniffer_text_sensor(text_sensor::TextSensor *s) { sniffer_text_ = s; }
-    
-    // ── Lifecycle ──
-    void setup() override;
-    void loop() override;
-    void dump_config() override;
-    
-    // ── Service ──
-    void send_keys_service(const std::string &keys);
+  void add_virtual_zone(uint8_t zone, uint16_t packet_code,
+                         bool clear_on_close, bool trigger_on_open,
+                         binary_sensor::BinarySensor *sensor);
 
-    // ── Programming Services ──
-    void enter_programming_service();
-    void enter_advanced_service();
-    void exit_programming_service();
-    void set_entry_delay_service(int seconds);
-    void set_exit_delay_service(int seconds);
-    void set_siren_duration_service(int minutes);
-    void set_sabotage_inhibit_service(bool enabled);
-    void set_ac_frequency_service(int hz);
-    void set_entry_annunciator_service(bool enabled);
-    void set_battery_save_service(bool enabled);
-    void set_owner_code_condition_service(bool disarm_only);
-    void change_owner_code_service(const std::string &new_code);
-    void change_installer_code_service(const std::string &new_code);
-    void program_user_service(int user, const std::string &code, int permissions, bool can_disarm);
-    void rf_learn_mode_service();
-    void rf_learn_slot_service(int slot);
-    void rf_delete_slot_service(int slot);
-    void toggle_zone_in_mode_service(int zone);
-    void save_estoy_config_service();
-    void save_mevoy_config_service();
-    void set_zone_type_service(int zone, const std::string &type);
-    void set_panic_zone_service();
-    void set_tamper_zone_service();
-    void set_clock_source_service(bool crystal);
-    void set_wired_zones_service(bool enabled);
-    void set_partition_merge_service(bool enabled);
-    void set_pgm_output_service(int output, int option, int partition);
+  // ── Entity Registration ──
+  void set_alarm_control_panel(alarm_control_panel::AlarmControlPanel *acp) { acp_ = acp; }
+  void set_estoy_sensor(binary_sensor::BinarySensor *s) { estoy_sensor_ = s; }
+  void set_zone_sensor(uint8_t zone, binary_sensor::BinarySensor *s);
+  void set_sniffer_text_sensor(text_sensor::TextSensor *s) { sniffer_text_ = s; }
+  void set_sniffer_switch(X28SnifferSwitch *s) { sniffer_switch_ = s; }
 
-    // ── HA Alarm Control Panel Actions ──
-    void arm_away();
-    void arm_home();
-    void disarm();
-    
-    // ── Event Handlers (called from MPXBus callbacks) ──
-    void on_event(MPXEvent event);
-    void on_packet(uint16_t word);
-    void on_zone(uint8_t zone, bool triggered);
+  // ── Services ──
+  void send_keys_service(const std::string &keys);
+  void send_packet(uint16_t code) { bus_.send_packet(code); }
+  void enter_programming_service();
+  void enter_advanced_service();
+  void exit_programming_service();
+  void set_entry_delay_service(int seconds);
+  void set_exit_delay_service(int seconds);
+  void set_siren_duration_service(int minutes);
+  void set_siren_b_duration_service(int minutes);
+  void set_sabotage_inhibit_service(bool enabled);
+  void set_ac_frequency_service(int hz);
+  void set_entry_annunciator_service(bool enabled);
+  void set_battery_save_service(bool enabled);
+  void set_owner_code_condition_service(bool disarm_only);
+  void set_zone_conditionality_service(bool enabled);
+  void change_owner_code_service(const std::string &new_code);
+  void change_installer_code_service(const std::string &new_code);
+  void program_user_service(int user, const std::string &code, int permissions, bool can_disarm);
+  void rf_learn_mode_service();
+  void rf_learn_slot_service(int slot);
+  void rf_delete_slot_service(int slot);
+  void exit_rf_learning_service();
+  void toggle_zone_in_mode_service(int zone);
+  void save_estoy_config_service();
+  void save_mevoy_config_service();
+  void set_zone_type_service(int zone, const std::string &type);
+  void set_panic_zone_service();
+  void set_tamper_zone_service();
+  void set_clock_source_service(bool crystal);
+  void set_wired_zones_service(bool enabled);
+  void set_partition_merge_service(bool enabled);
+  void set_pgm_output_service(int output, int option, int partition);
 
-protected:
-    void send_programmed_sequence(const std::string &body, bool use_installer, bool advanced);
-    void toggle_mode(MPXEvent target_mode);
+  // ── HA Alarm Control Panel Actions ──
+  void arm_away();
+  void arm_home();
+  void disarm();
 
-    // Bus
-    MPXBus bus_;
-    InternalGPIOPin *rx_pin_ = nullptr;
-    InternalGPIOPin *tx_pin_ = nullptr;
-    bool invert_rx_ = true;
-    bool invert_tx_ = true;
-    
-    // Config
-    std::string code_;
-    std::string installer_code_ = "467825";
-    X28Model model_ = X28Model::AUTO;
-    ModelCapabilities model_capabilities_{get_model_capabilities(X28Model::AUTO)};
-    bool debug_ = false;
-    bool sniffing_enabled_ = false;
-    uint32_t sniffing_throttle_ms_ = 1000;
-    uint32_t zone_debounce_ms_ = 500;
-    
-    // State tracking
-    uint16_t last_mode_{MPX_CODE_ME_VOY};
-    bool armed_confirmed_ = false;
-    bool arm_pending_ = false;
-    uint32_t arm_pending_start_ = 0;
-    bool disarm_pending_ = false;
-    bool mode_waiting_ = false;
-    uint32_t last_sniff_log_ = 0;
-    uint16_t last_sniff_word_ = 0;
-    
-    // Entities
-    alarm_control_panel::AlarmControlPanel *acp_{nullptr};
-    binary_sensor::BinarySensor *estoy_sensor_{nullptr};
-    binary_sensor::BinarySensor *zone_sensors_[MAX_ZONES]{};
-    uint32_t zone_last_packet_[MAX_ZONES]{};
-    text_sensor::TextSensor *sniffer_text_{nullptr};
-    
-    // Virtual zones
-    std::vector<VirtualZoneState> virtual_zones_;
-    uint16_t zone_code_overrides_[MAX_ZONES + 1]{};
+  // ── Event Handlers ──
+  void on_event(uint16_t word);
+  void on_packet(uint16_t word);
+  void on_zone(uint8_t zone, bool triggered);
+
+ protected:
+  struct VirtualZoneState {
+    uint8_t zone;
+    uint16_t packet_code;
+    bool clear_on_close;
+    binary_sensor::BinarySensor *sensor;
+    bool trigger_on_open;
+    bool last_state;
+  };
+
+  void send_programmed_sequence(const std::string &body, bool use_installer, bool advanced, bool exit_f = true);
+  void toggle_mode(uint16_t target_mode);
+
+  MPXBus bus_;
+  InternalGPIOPin *rx_pin_{nullptr};
+  InternalGPIOPin *tx_pin_{nullptr};
+  bool invert_rx_{true};
+  bool invert_tx_{true};
+
+  std::string code_;
+  std::string installer_code_ = "467825";
+  X28Model model_{X28Model::AUTO};
+  ModelCapabilities model_capabilities_{get_model_capabilities(X28Model::AUTO)};
+  bool debug_{false};
+  bool sniffing_enabled_{false};
+  uint32_t sniffing_throttle_ms_{1000};
+  uint32_t zone_debounce_ms_{500};
+
+  uint16_t last_mode_{MPX_CODE_ME_VOY};
+  bool armed_confirmed_{false};
+  uint32_t arm_pending_start_{0};
+  bool arm_pending_{false};
+  bool disarm_pending_{false};
+  bool mode_waiting_{false};
+  uint32_t last_sniff_log_{0};
+  uint16_t last_sniff_word_{0};
+  uint32_t zone_last_packet_[MAX_ZONES]{};
+
+  alarm_control_panel::AlarmControlPanel *acp_{nullptr};
+  binary_sensor::BinarySensor *estoy_sensor_{nullptr};
+  binary_sensor::BinarySensor *zone_sensors_[MAX_ZONES]{};
+  text_sensor::TextSensor *sniffer_text_{nullptr};
+  X28SnifferSwitch *sniffer_switch_{nullptr};
+
+  std::vector<VirtualZoneState> virtual_zones_;
+  uint16_t zone_code_overrides_[MAX_ZONES + 1]{};
 };
 ```
 

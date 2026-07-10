@@ -331,6 +331,9 @@ void X28Alarm::dump_config() {
                 model_ == X28Model::N16_MPXH ? "N16-MPXH" :
                 model_ == X28Model::N32_MPXH ? "N32-MPXH" :
                 model_ == X28Model::N32F_MPXH ? "N32F-MPXH" :
+                model_ == X28Model::_9002_MPX ? "9002-MPX" :
+                model_ == X28Model::_9003_MPX ? "9003-MPX" :
+                model_ == X28Model::_9004_MPX ? "9004-MPX" :
                 "OTHER");
   ESP_LOGCONFIG(TAG, "  Zones: %d MPXH, %d wired",
                 model_capabilities_.max_mpxh_zones,
